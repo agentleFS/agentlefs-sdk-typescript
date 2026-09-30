@@ -44,9 +44,9 @@ permissions:
 jobs:
   publish:
     name: Publish to npm
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
-      - uses: actions/checkout@v4
+      - uses: useblacksmith/checkout@v1
 
       # Node 22.14+ and npm 11.5.1+ are the floor for trusted publishing. Pinned rather
       # than "latest" so a runner image change cannot silently drop below it.

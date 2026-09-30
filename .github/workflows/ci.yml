@@ -31,9 +31,9 @@ env:
 jobs:
   generated-code-is-current:
     name: Committed SDK matches the spec
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
-      - uses: actions/checkout@v4
+      - uses: useblacksmith/checkout@v1
 
       - uses: oven-sh/setup-bun@v2
         with:
@@ -77,9 +77,9 @@ jobs:
 
   builds:
     name: Generated SDK compiles
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
-      - uses: actions/checkout@v4
+      - uses: useblacksmith/checkout@v1
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: "1.3.11"
