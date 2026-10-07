@@ -11,7 +11,8 @@
 # short-lived credential scoped to this repo and this workflow file, and generates provenance
 # attestations automatically.
 #
-# Configured as: ContextHubApps / agentlefs-sdk-typescript / release.yml / npm publish.
+# Required trusted publisher: agentleFS / agentlefs-sdk-typescript / release.yml.
+# Leave the environment blank: this job declares no GitHub environment.
 #
 # Worth knowing it was set up BEFORE the package existed on the registry, which npm's docs
 # are ambiguous about. So a first release does not need a token-based bootstrap.
@@ -75,7 +76,9 @@ jobs:
       - name: Derive the version
         id: version
         run: |
+          set -euo pipefail
           if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            [[ "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::tag must be vX.Y.Z"; exit 1; }
             v="${GITHUB_REF_NAME#v}"
           else
             v="0.0.0-dev"
@@ -102,6 +105,11 @@ jobs:
             exit 1
           fi
           echo "Committed SDK matches the spec."
+
+      - name: SDK tests
+        env:
+          AGENTLEFS_TOKEN: ${{ secrets.AGENTLEFS_TOKEN }}
+        run: bun run test
 
       - name: Install build dependencies
         working-directory: sdks/typescript
