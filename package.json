@@ -5,6 +5,7 @@
   "scripts": {
     "spec:pull": "mkdir -p openapi && curl -sS --fail --max-time 30 -o openapi/v1.yaml https://agentlefs.com/v1/openapi.yaml && echo \"fetched $(wc -c < openapi/v1.yaml) bytes\"",
     "generate": "bun run spec:pull && fern generate --local && bun run scripts/write-package-json.ts",
-    "check": "bun run spec:pull && fern check"
+    "check": "bun run spec:pull && fern check",
+    "test": "bun test tests"
   }
 }
