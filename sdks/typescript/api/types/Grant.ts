@@ -18,9 +18,9 @@ export namespace Grant {
     } as const;
     export type SubjectType = (typeof SubjectType)[keyof typeof SubjectType];
     export const Role = {
-        Owner: "owner",
-        Writer: "writer",
-        Reader: "reader",
+        Viewer: "viewer",
+        Editor: "editor",
+        Manager: "manager",
     } as const;
     export type Role = (typeof Role)[keyof typeof Role];
     export const ScopeType = {

@@ -221,8 +221,10 @@ export class DocumentsClient {
     }
 
     /**
-     * @param {AgentlefsApi.RetrieveDocumentRequest} request
-     * @param {DocumentsClient.RequestOptions} requestOptions - Request-specific configuration.
+     * Returns the document as JSON by default. Pass `download=1` to receive the raw
+     * file instead — the stored body for a text document, or the original bytes for a
+     * binary asset — with a `Content-Disposition: attachment` filename, suitable for
+     * saving to disk. The reach that governs the JSON read governs the download.
      *
      * @throws {@link AgentlefsApi.BadRequestError}
      * @throws {@link AgentlefsApi.UnauthorizedError}
@@ -230,26 +232,22 @@ export class DocumentsClient {
      * @throws {@link AgentlefsApi.TooManyRequestsError}
      * @throws {@link errors.AgentlefsApiError}
      * @throws {@link errors.AgentlefsApiTimeoutError}
-     *
-     * @example
-     *     await client.documents.retrieveDocument({
-     *         location: "handbook/onboarding/day-one.md"
-     *     })
      */
     public retrieveDocument(
         request: AgentlefsApi.RetrieveDocumentRequest,
         requestOptions?: DocumentsClient.RequestOptions,
-    ): core.HttpResponsePromise<AgentlefsApi.DocumentContent> {
+    ): core.HttpResponsePromise<core.BinaryResponse> {
         return core.HttpResponsePromise.fromPromise(this.__retrieveDocument(request, requestOptions));
     }
 
     private async __retrieveDocument(
         request: AgentlefsApi.RetrieveDocumentRequest,
         requestOptions?: DocumentsClient.RequestOptions,
-    ): Promise<core.WithRawResponse<AgentlefsApi.DocumentContent>> {
-        const { location, offset } = request;
+    ): Promise<core.WithRawResponse<core.BinaryResponse>> {
+        const { location, offset, download } = request;
         const _queryParams: Record<string, unknown> = {
             offset,
+            download: download != null ? download : undefined,
         };
         const _authRequest: core.AuthRequest = await this._options.authProvider.getAuthRequest();
         const _headers: core.Fetcher.Args["headers"] = mergeHeaders(
@@ -257,7 +255,7 @@ export class DocumentsClient {
             this._options?.headers,
             requestOptions?.headers,
         );
-        const _response = await core.fetcher({
+        const _response = await core.fetcher<core.BinaryResponse>({
             url: core.url.join(
                 (await core.Supplier.get(this._options.baseUrl)) ??
                     (await core.Supplier.get(this._options.environment)) ??
@@ -271,6 +269,7 @@ export class DocumentsClient {
                 .addMany(_queryParams)
                 .mergeAdditional(requestOptions?.queryParams)
                 .build(),
+            responseType: "binary-response",
             timeoutMs: (requestOptions?.timeoutInSeconds ?? this._options?.timeoutInSeconds ?? 60) * 1000,
             maxRetries: requestOptions?.maxRetries ?? this._options?.maxRetries,
             abortSignal: requestOptions?.abortSignal,
@@ -278,7 +277,7 @@ export class DocumentsClient {
             logging: this._options.logging,
         });
         if (_response.ok) {
-            return { data: _response.body as AgentlefsApi.DocumentContent, rawResponse: _response.rawResponse };
+            return { data: _response.body, rawResponse: _response.rawResponse };
         }
 
         if (_response.error.reason === "status-code") {
@@ -316,8 +315,9 @@ export class DocumentsClient {
     }
 
     /**
-     * `If-Match` is required. Send the `ETag` from a read to update only if the
-     * document has not changed since, or `*` to overwrite unconditionally.
+     * `If-Match` is required. Send the `ETag` from a read, or the one the last
+     * write returned, to update only if the document has not changed since — or `*`
+     * to overwrite unconditionally.
      *
      * @param {AgentlefsApi.UpdateDocumentRequest} request
      * @param {DocumentsClient.RequestOptions} requestOptions - Request-specific configuration.
@@ -416,7 +416,7 @@ export class DocumentsClient {
     }
 
     /**
-     * Requires `owner` on the document, a higher bar than updating it. A delete is
+     * Requires `manager` on the document, a higher bar than updating it. A delete is
      * the one operation with no inverse: an update leaves the prior version in
      * history and a rename relocates content that still exists, but a delete ends
      * the object.
@@ -624,6 +624,134 @@ export class DocumentsClient {
         }
 
         return handleNonStatusCodeError(_response.error, _response.rawResponse, "POST", "/v1/renames");
+    }
+
+    /**
+     * Restores exactly what one delete removed, at the version it had, with its
+     * sharing intact.
+     *
+     * Deleting does not destroy anything. A document's head moves to a commit that
+     * records the deletion, so the content, its history, its comments and the grants
+     * on it are all still attached to the same document — undoing moves the head
+     * back. Nothing is reassembled and nothing is copied.
+     *
+     * `location` is whatever was deleted: a document, a directory, or a whole
+     * folder. One delete is one batch however deep it went, so undoing a folder
+     * restores the folder and everything that was in it.
+     *
+     * ## What "the last delete" means
+     *
+     * Deletes performed at different moments are different batches. Undoing restores
+     * the most recent one at this location, not everything ever deleted here.
+     *
+     * Undoing twice is harmless: the second call finds nothing left to restore and
+     * reports `restored: 0`. A location that never had a delete is a `404`.
+     *
+     * ## Two cases it will not resurrect
+     *
+     * A document that was **written over** after being deleted is not restored — the
+     * content at that path is a newer version of the same document, and an undo must
+     * never replace live content with a version somebody deleted.
+     *
+     * A document deleted before it ever had content has no version to become current
+     * again. Those are counted in `unrestorable` rather than silently skipped.
+     *
+     * Authorized as the delete it reverses: an undo makes content visible again, so
+     * it requires the same right that removing it did.
+     *
+     * @param {AgentlefsApi.UndeleteAtLocationRequest} request
+     * @param {DocumentsClient.RequestOptions} requestOptions - Request-specific configuration.
+     *
+     * @throws {@link AgentlefsApi.BadRequestError}
+     * @throws {@link AgentlefsApi.UnauthorizedError}
+     * @throws {@link AgentlefsApi.NotFoundError}
+     * @throws {@link AgentlefsApi.TooManyRequestsError}
+     * @throws {@link errors.AgentlefsApiError}
+     * @throws {@link errors.AgentlefsApiTimeoutError}
+     *
+     * @example
+     *     await client.documents.undeleteAtLocation({
+     *         "Idempotency-Key": "Idempotency-Key",
+     *         location: "handbook/onboarding/day-one.md"
+     *     })
+     */
+    public undeleteAtLocation(
+        request: AgentlefsApi.UndeleteAtLocationRequest,
+        requestOptions?: DocumentsClient.RequestOptions,
+    ): core.HttpResponsePromise<AgentlefsApi.UndeleteAtLocationResponse> {
+        return core.HttpResponsePromise.fromPromise(this.__undeleteAtLocation(request, requestOptions));
+    }
+
+    private async __undeleteAtLocation(
+        request: AgentlefsApi.UndeleteAtLocationRequest,
+        requestOptions?: DocumentsClient.RequestOptions,
+    ): Promise<core.WithRawResponse<AgentlefsApi.UndeleteAtLocationResponse>> {
+        const { "Idempotency-Key": idempotencyKey, ..._body } = request;
+        const _authRequest: core.AuthRequest = await this._options.authProvider.getAuthRequest();
+        const _headers: core.Fetcher.Args["headers"] = mergeHeaders(
+            _authRequest.headers,
+            this._options?.headers,
+            mergeOnlyDefinedHeaders({ "Idempotency-Key": idempotencyKey }),
+            requestOptions?.headers,
+        );
+        const _response = await core.fetcher({
+            url: core.url.join(
+                (await core.Supplier.get(this._options.baseUrl)) ??
+                    (await core.Supplier.get(this._options.environment)) ??
+                    environments.AgentlefsApiEnvironment.Production,
+                "v1/undeletes",
+            ),
+            method: "POST",
+            headers: _headers,
+            contentType: "application/json",
+            queryString: core.url.queryBuilder().mergeAdditional(requestOptions?.queryParams).build(),
+            requestType: "json",
+            body: mergeAdditionalBodyParameters(_body, requestOptions?.additionalBodyParameters),
+            timeoutMs: (requestOptions?.timeoutInSeconds ?? this._options?.timeoutInSeconds ?? 60) * 1000,
+            maxRetries: requestOptions?.maxRetries ?? this._options?.maxRetries,
+            abortSignal: requestOptions?.abortSignal,
+            fetchFn: this._options?.fetch,
+            logging: this._options.logging,
+        });
+        if (_response.ok) {
+            return {
+                data: _response.body as AgentlefsApi.UndeleteAtLocationResponse,
+                rawResponse: _response.rawResponse,
+            };
+        }
+
+        if (_response.error.reason === "status-code") {
+            switch (_response.error.statusCode) {
+                case 400:
+                    throw new AgentlefsApi.BadRequestError(
+                        _response.error.body as AgentlefsApi.Error_,
+                        _response.rawResponse,
+                    );
+                case 401:
+                    throw new AgentlefsApi.UnauthorizedError(
+                        _response.error.body as AgentlefsApi.Error_,
+                        _response.rawResponse,
+                    );
+                case 404:
+                    throw new AgentlefsApi.NotFoundError(
+                        _response.error.body as AgentlefsApi.Error_,
+                        _response.rawResponse,
+                    );
+                case 429:
+                    throw new AgentlefsApi.TooManyRequestsError(
+                        _response.error.body as AgentlefsApi.Error_,
+                        _response.rawResponse,
+                    );
+                default:
+                    throw new errors.AgentlefsApiError({
+                        statusCode: _response.error.statusCode,
+                        body: _response.error.body,
+                        rawResponse: _response.rawResponse,
+                    });
+            }
+        }
+
+        return handleNonStatusCodeError(_response.error, _response.rawResponse, "POST", "/v1/undeletes");
     }
 
     /**

@@ -3,6 +3,13 @@
 export interface WriteResult {
     /** The whole path from the workspace root. */
     location?: string | undefined;
+    /**
+     * The commit this write created, or `null` when it created none. The stored
+     * document is its body, so a write whose body comes out byte-identical
+     * allocates no commit however much frontmatter it moves, and `null` says so
+     * rather than naming a commit that is not this document's. A replayed
+     * response carries whatever the original write reported.
+     */
     commit?: (string | null) | undefined;
     /** Present and true when this was an idempotent replay. */
     replayed?: boolean | undefined;

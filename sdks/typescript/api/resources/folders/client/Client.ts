@@ -116,7 +116,7 @@ export class FoldersClient {
     }
 
     /**
-     * Creates a folder and grants your key's principal ownership of it.
+     * Creates a folder and grants your key's principal `manager` on it.
      *
      * Nesting is expressed in the location itself: `handbook` makes a top-level
      * folder, `handbook/vendor/contracts` makes a nested one, creating whatever is
@@ -212,5 +212,112 @@ export class FoldersClient {
         }
 
         return handleNonStatusCodeError(_response.error, _response.rawResponse, "POST", "/v1/folders");
+    }
+
+    /**
+     * Returns a zip archive of everything under `location` that your key's principal
+     * can read, laid out by path relative to the folder. Each file is filtered
+     * through the same reach that governs a read, so a document you cannot read is
+     * not in the archive — the zip never reveals the existence of content behind an
+     * ACL.
+     *
+     * The archive may hold FEWER files than the folder does: an asset over the
+     * per-file limit, a blob that cannot be read, or a folder past the archive's size
+     * or file-count caps. That is a 200, not an error. Read `x-archive-omitted` to
+     * detect it rather than unzipping — it is `0` on a complete archive. When it is
+     * non-zero the archive also contains `_OMITTED.txt` naming each missing file and
+     * why, and those files can be fetched in full one at a time with
+     * `GET /v1/documents/{location}?download=1`.
+     *
+     * An omission is never a permissions signal. Content behind an ACL is absent from
+     * the archive AND from the manifest, exactly as it is absent from a listing.
+     *
+     * `location` is given in the query string, like `parent` on `GET /v1/folders`.
+     *
+     * @throws {@link AgentlefsApi.BadRequestError}
+     * @throws {@link AgentlefsApi.UnauthorizedError}
+     * @throws {@link AgentlefsApi.NotFoundError}
+     * @throws {@link AgentlefsApi.TooManyRequestsError}
+     * @throws {@link errors.AgentlefsApiError}
+     * @throws {@link errors.AgentlefsApiTimeoutError}
+     */
+    public exportFolder(
+        request: AgentlefsApi.ExportFolderRequest,
+        requestOptions?: FoldersClient.RequestOptions,
+    ): core.HttpResponsePromise<core.BinaryResponse> {
+        return core.HttpResponsePromise.fromPromise(this.__exportFolder(request, requestOptions));
+    }
+
+    private async __exportFolder(
+        request: AgentlefsApi.ExportFolderRequest,
+        requestOptions?: FoldersClient.RequestOptions,
+    ): Promise<core.WithRawResponse<core.BinaryResponse>> {
+        const { location } = request;
+        const _queryParams: Record<string, unknown> = {
+            location,
+        };
+        const _authRequest: core.AuthRequest = await this._options.authProvider.getAuthRequest();
+        const _headers: core.Fetcher.Args["headers"] = mergeHeaders(
+            _authRequest.headers,
+            this._options?.headers,
+            requestOptions?.headers,
+        );
+        const _response = await core.fetcher<core.BinaryResponse>({
+            url: core.url.join(
+                (await core.Supplier.get(this._options.baseUrl)) ??
+                    (await core.Supplier.get(this._options.environment)) ??
+                    environments.AgentlefsApiEnvironment.Production,
+                "v1/folders/export",
+            ),
+            method: "GET",
+            headers: _headers,
+            queryString: core.url
+                .queryBuilder()
+                .addMany(_queryParams)
+                .mergeAdditional(requestOptions?.queryParams)
+                .build(),
+            responseType: "binary-response",
+            timeoutMs: (requestOptions?.timeoutInSeconds ?? this._options?.timeoutInSeconds ?? 60) * 1000,
+            maxRetries: requestOptions?.maxRetries ?? this._options?.maxRetries,
+            abortSignal: requestOptions?.abortSignal,
+            fetchFn: this._options?.fetch,
+            logging: this._options.logging,
+        });
+        if (_response.ok) {
+            return { data: _response.body, rawResponse: _response.rawResponse };
+        }
+
+        if (_response.error.reason === "status-code") {
+            switch (_response.error.statusCode) {
+                case 400:
+                    throw new AgentlefsApi.BadRequestError(
+                        _response.error.body as AgentlefsApi.Error_,
+                        _response.rawResponse,
+                    );
+                case 401:
+                    throw new AgentlefsApi.UnauthorizedError(
+                        _response.error.body as AgentlefsApi.Error_,
+                        _response.rawResponse,
+                    );
+                case 404:
+                    throw new AgentlefsApi.NotFoundError(
+                        _response.error.body as AgentlefsApi.Error_,
+                        _response.rawResponse,
+                    );
+                case 429:
+                    throw new AgentlefsApi.TooManyRequestsError(
+                        _response.error.body as AgentlefsApi.Error_,
+                        _response.rawResponse,
+                    );
+                default:
+                    throw new errors.AgentlefsApiError({
+                        statusCode: _response.error.statusCode,
+                        body: _response.error.body,
+                        rawResponse: _response.rawResponse,
+                    });
+            }
+        }
+
+        return handleNonStatusCodeError(_response.error, _response.rawResponse, "GET", "/v1/folders/export");
     }
 }

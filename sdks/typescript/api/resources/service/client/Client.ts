@@ -23,8 +23,9 @@ export class ServiceClient {
     }
 
     /**
-     * Reports that the service is serving. Requires no credential and touches no
-     * tenant data, so it is safe for an uptime monitor.
+     * Reports that the service is serving, and which build is serving it. Requires no
+     * credential and touches no tenant data, so it is safe for an uptime monitor — and
+     * `build` makes "did that merge actually deploy?" one unauthenticated request (#786).
      *
      * @param {ServiceClient.RequestOptions} requestOptions - Request-specific configuration.
      *

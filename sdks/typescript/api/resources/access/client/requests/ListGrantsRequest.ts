@@ -13,7 +13,7 @@ export interface ListGrantsRequest {
     /**
      * Which kind of thing `scope_id` names. Required and never inferred: a document
      * and a directory can share a path and are different scopes with different
-     * owners.
+     * grants.
      */
     scope_type: AgentlefsApi.ListGrantsRequestScopeType;
     /** The scope, slash-joined. `handbook`, `handbook/policies`, `handbook/leave.md`. */

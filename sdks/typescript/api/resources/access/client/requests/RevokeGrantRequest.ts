@@ -7,7 +7,7 @@ import type * as AgentlefsApi from "../../../../index.js";
  *     {
  *         subject_type: "user",
  *         subject_id: "subject_id",
- *         role: "owner",
+ *         role: "viewer",
  *         scope_type: "document",
  *         scope_id: "scope_id"
  *     }
@@ -15,11 +15,12 @@ import type * as AgentlefsApi from "../../../../index.js";
 export interface RevokeGrantRequest {
     subject_type: AgentlefsApi.RevokeGrantRequestSubjectType;
     subject_id: string;
+    /** viewer, editor or manager. reader, writer and approver are deprecated aliases. */
     role: AgentlefsApi.RevokeGrantRequestRole;
     /**
      * Which kind of thing `scope_id` names. Required and never inferred: a document
      * and a directory can share a path and are different scopes with different
-     * owners.
+     * grants.
      */
     scope_type: AgentlefsApi.RevokeGrantRequestScopeType;
     /** The scope, slash-joined. `handbook`, `handbook/policies`, `handbook/leave.md`. */
