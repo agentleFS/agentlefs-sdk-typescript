@@ -56,8 +56,8 @@ jobs:
         run: |
           set -euo pipefail
           python3 scripts/release_contract.py validate "$RELEASE" "$BUILD" "$SPEC_SHA256"
-          if git show-ref --verify --quiet "refs/tags/v$RELEASE"; then
-            git show "v$RELEASE:sdk-release.json" > /tmp/sdk-release.json
+          if git show-ref --verify --quiet "refs/tags/$RELEASE"; then
+            git show "$RELEASE:sdk-release.json" > /tmp/sdk-release.json
             python3 scripts/release_contract.py metadata "$RELEASE" "$BUILD" "$SPEC_SHA256" /tmp/sdk-release.json
             echo "exists=true" >> "$GITHUB_OUTPUT"
           else
@@ -101,8 +101,8 @@ jobs:
           fi
           # The generated commit lives in its immutable release tag. Independent versions
           # never compete to overwrite main, and branch protection needs no exception.
-          git tag "v$RELEASE"
-          git push origin "refs/tags/v$RELEASE"
+          git tag "$RELEASE"
+          git push origin "refs/tags/$RELEASE"
       - name: Publish through the npm trusted workflow
         env:
           GH_TOKEN: ${{ github.token }}
@@ -110,5 +110,5 @@ jobs:
           BUILD: ${{ inputs.build }}
         run: |
           # GITHUB_TOKEN-created tags do not trigger push workflows. Explicit dispatch does.
-          gh workflow run release.yml --ref "v$RELEASE" -f dry_run=false -f release="$RELEASE" -f build="$BUILD"
+          gh workflow run release.yml --ref "$RELEASE" -f dry_run=false -f release="$RELEASE" -f build="$BUILD"
           echo "Requested Release for @agentlefs/sdk@$RELEASE; verify that workflow to confirm npm publication." >> "$GITHUB_STEP_SUMMARY"
