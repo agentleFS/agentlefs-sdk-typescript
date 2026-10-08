@@ -7,7 +7,7 @@
 # So CI regenerates and diffs. A clean diff means the committed code is reproducible; a
 # dirty one means the tree and the spec disagree, and the log says which files.
 #
-# It does NOT publish; release.yml does, on a vX.Y.Z tag. Regeneration after an agentleFS
+# It does NOT publish; release.yml does, on a X.Y.Z tag. Regeneration after an agentleFS
 # release is regenerate.yml, dispatched with the immutable final release spec.
 name: CI
 

@@ -22,11 +22,11 @@ releases whose API contract is unchanged.
 Regeneration verifies the snapshot digest, generates from those exact bytes and runs SDK
 tests, builds, and loads the packed package through CJS and ESM. Only after those
 checks pass does it commit the generated SDK, OpenAPI snapshot and release
-metadata as a snapshot commit, create `vX.Y.Z`, and explicitly dispatch
+metadata as a snapshot commit, create `X.Y.Z`, and explicitly dispatch
 `release.yml` on that tag. A bot-created tag does not start a push workflow by itself.
 
 The API repository needs `SDK_DISPATCH_TOKEN` with Actions write access to this
-repository. Each tested snapshot is committed only under its `vX.Y.Z` tag;
+repository. Each tested snapshot is committed only under its `X.Y.Z` tag;
 `main` continues to hold the reviewed generator and workflow code. Per-version
 queues let separate releases finish without overwriting main or cancelling one
 another. The workflow needs contents and Actions write permissions; PR creation
