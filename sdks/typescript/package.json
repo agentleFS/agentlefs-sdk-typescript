@@ -34,8 +34,8 @@
     "build": "tsc -p tsconfig.esm.json && tsc -p tsconfig.cjs.json && node -e \"require('fs').writeFileSync('dist/cjs/package.json', JSON.stringify({type:'commonjs'}) + '\\n')\""
   },
   "devDependencies": {
-    "@types/node": "^22.0.0",
-    "typescript": "^5.7.0"
+    "@types/node": "22.20.5",
+    "typescript": "5.9.3"
   },
   "engines": {
     "node": ">=18.0.0"

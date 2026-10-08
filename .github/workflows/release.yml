@@ -1,221 +1,138 @@
-# Publish @agentlefs/sdk to npm on a version tag.
-#
-# ── THIS FILENAME IS PART OF THE CONFIG ──────────────────────────────────────
-# npm's trusted publishing pins the WORKFLOW FILENAME. Once a trusted publisher is
-# configured against `release.yml`, renaming this file breaks publishing with an
-# authentication error that does not mention the rename. Do not rename it.
-#
-# ── AUTHENTICATION IS OIDC, NOT A TOKEN ──────────────────────────────────────
-# Trusted publishing is configured for this package, so there is no NPM_TOKEN in this
-# workflow and none is needed. npm exchanges the OIDC token from `id-token: write` for a
-# short-lived credential scoped to this repo and this workflow file, and generates provenance
-# attestations automatically.
-#
-# Required trusted publisher: agentleFS / agentlefs-sdk-typescript / release.yml.
-# Leave the environment blank: this job declares no GitHub environment.
-#
-# Worth knowing it was set up BEFORE the package existed on the registry, which npm's docs
-# are ambiguous about. So a first release does not need a token-based bootstrap.
+# This filename is pinned by npm trusted publishing: never rename it.
+# No NPM_TOKEN: only release.yml receives OIDC publishing permission.
 name: Release
 
 on:
   push:
-    # Only version tags. A branch push must never publish.
     tags: ["v*.*.*"]
-  # Manual, for a dry run that proves the pipeline without publishing anything.
   workflow_dispatch:
     inputs:
       dry_run:
         description: "Build and pack, but do not publish"
         type: boolean
         default: true
-
-env:
-  # Same pin as ci.yml. The generator writes the whole tree, so an unpinned bump would land
-  # as an unexplained diff in the staleness check below and block a release.
-  FERN_VERSION: "5.98.3"
+      release:
+        description: "Automatic publication: final API X.Y.Z release"
+        required: false
+      build:
+        description: "Automatic publication: released API commit SHA"
+        required: false
 
 permissions:
-  # write, not read: the last step creates a GitHub Release for the tag.
   contents: write
-  # Required for trusted publishing: npm exchanges this OIDC token for a short-lived publish
-  # credential. Removing it does not fall back to anything, it just fails as unauthenticated.
   id-token: write
+
+concurrency:
+  group: npm-sdk-publish
+  cancel-in-progress: false
+  queue: max
 
 jobs:
   publish:
-    name: Publish to npm
+    name: Test and publish to npm
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
-
-      # Node 22.14+ and npm 11.5.1+ are the floor for trusted publishing. Pinned rather
-      # than "latest" so a runner image change cannot silently drop below it.
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: "22.17.0"
           registry-url: "https://registry.npmjs.org"
-
       - name: Upgrade npm for trusted publishing
         run: npm install -g npm@11.5.1
-
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: "1.3.11"
-
-      # `bun run generate` shells out to `fern`, which is not preinstalled on a runner. Its
-      # absence failed the first dry run with "fern: command not found" at the regenerate
-      # step: ci.yml had this step and release.yml did not, which is exactly the kind of gap
-      # a dry run exists to find before a tag does.
-      - name: Install the Fern CLI
-        run: bun add -g fern-api@${{ env.FERN_VERSION }} --registry https://registry.npmjs.org
-
-      # THE VERSION COMES FROM THE TAG, not from a file. write-package-json.ts reads
-      # SDK_VERSION, so nothing has to be edited and committed to cut a release, and a tag
-      # and its published version cannot disagree.
-      - name: Derive the version
+      - name: Validate the tagged release contract
         id: version
+        env:
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
+          RELEASE: ${{ inputs.release }}
+          BUILD: ${{ inputs.build }}
         run: |
           set -euo pipefail
-          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
-            [[ "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::tag must be vX.Y.Z"; exit 1; }
-            v="${GITHUB_REF_NAME#v}"
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then
+            version="${GITHUB_REF_NAME#v}"
+            [ "$GITHUB_REF_NAME" = "v$version" ]
+            python3 scripts/release_contract.py validate "$version"
+            # Automatic generated snapshots have a trusted main commit as their parent.
+            git merge-base --is-ancestor HEAD^ origin/main
+            unexpected="$(git diff-tree --no-commit-id --name-only -r HEAD | grep -Ev '^(sdks/|openapi/v1\.yaml$|sdk-release\.json$)' || true)"
+            [ -z "$unexpected" ] || { echo "::error::Release snapshot changes workflow/source files: $unexpected"; exit 1; }
+            recorded_build="$(python3 -c 'import json; print(json.load(open("sdk-release.json"))["build"])')"
+            recorded_spec="$(python3 -c 'import json; print(json.load(open("sdk-release.json"))["spec_sha256"])')"
+            python3 scripts/release_contract.py metadata "$version" "$recorded_build" "$recorded_spec" sdk-release.json
+            python3 scripts/release_contract.py snapshot "$recorded_spec" openapi/v1.yaml
+            echo "build=$recorded_build" >> "$GITHUB_OUTPUT"
+            echo "spec_sha256=$recorded_spec" >> "$GITHUB_OUTPUT"
+          elif [ "$DRY_RUN" = "true" ]; then
+            version="$(node -p "require('./sdks/typescript/package.json').version")"
           else
-            v="0.0.0-dev"
-          fi
-          echo "version=$v" >> "$GITHUB_OUTPUT"
-          echo "Publishing version $v"
-
-      # Regenerate rather than trusting the committed tree. A release should ship what the
-      # spec currently says, and this is the last point at which a drift between the two is
-      # cheap to notice.
-      - name: Regenerate from the live spec
-        env:
-          SDK_VERSION: ${{ steps.version.outputs.version }}
-        run: bun run generate
-
-      # If regeneration changed anything, the committed SDK was stale and the tag was cut
-      # against code that does not match the spec. Refuse rather than publish a surprise.
-      - name: The tagged SDK matches the spec
-        run: |
-          # package.json legitimately differs: its version came from the tag above.
-          if [ -n "$(git status --porcelain sdks/ | grep -v 'sdks/typescript/package.json')" ]; then
-            echo "::error::The committed SDK does not match the spec. Regenerate and commit before tagging."
-            git status --porcelain sdks/
+            echo "::error::Publishing requires a final vX.Y.Z SDK tag; branch dispatches can only dry run."
             exit 1
           fi
-          echo "Committed SDK matches the spec."
-
+          if [ -n "$RELEASE$BUILD" ]; then
+            [ "$version" = "$RELEASE" ]
+            python3 scripts/release_contract.py metadata "$RELEASE" "$BUILD" "$recorded_spec" sdk-release.json
+          fi
+          # Ship the tested, committed snapshot, never regenerate from a newer live API.
+          SDK_VERSION="$version" bun run scripts/write-package-json.ts
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "publish=$([ "$DRY_RUN" = "true" ] && echo false || echo true)" >> "$GITHUB_OUTPUT"
       - name: SDK tests
         env:
           AGENTLEFS_TOKEN: ${{ secrets.AGENTLEFS_TOKEN }}
         run: bun run test
-
-      - name: Install build dependencies
-        working-directory: sdks/typescript
-        run: npm install --no-package-lock
-
-      - name: Build
-        working-directory: sdks/typescript
-        run: npm run build
-
-      # Proves the tarball contains what package.json promises, before anything is
-      # published. A `files` entry that does not match reality is the classic way to ship an
-      # empty package.
-      - name: Inspect the tarball
-        working-directory: sdks/typescript
+      - name: Build and load the packed CJS and ESM package
+        id: package
+        run: bash scripts/check-package.sh
+      - name: Publish or verify an identical already published version
+        if: steps.version.outputs.publish == 'true'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          TARBALL: ${{ steps.package.outputs.tarball }}
         run: |
-          npm pack --dry-run
-          test -f dist/esm/index.js || { echo "::error::ESM build missing"; exit 1; }
-          test -f dist/cjs/index.js || { echo "::error::CJS build missing"; exit 1; }
-          test -f dist/esm/index.d.ts || { echo "::error::type declarations missing"; exit 1; }
-
-      # EXISTENCE IS NOT LOADABILITY. The check above passed for 0.2.0, which shipped a CJS
-      # build that threw "Cannot find module './api/index.js'" on require(): root
-      # package.json has "type":"module", so Node parsed dist/cjs as ESM. Only actually
-      # importing the packed tarball catches that class of bug, so install it into a scratch
-      # project and load it through both entry points the exports map advertises.
-      - name: The published package loads in CJS and ESM
-        working-directory: sdks/typescript
-        run: |
-          tarball="$(npm pack --silent)"
-          work="$(mktemp -d)"
-          cd "$work"
-          npm init -y >/dev/null
-          npm install "$OLDPWD/$tarball" --no-audit --no-fund >/dev/null
-          node -e "
-            const m = require('@agentlefs/sdk');
-            if (typeof m.AgentlefsApiClient !== 'function') throw new Error('CJS: client export missing');
-            console.log('CJS require() ok');
-          "
-          node --input-type=module -e "
-            import { AgentlefsApiClient } from '@agentlefs/sdk';
-            if (typeof AgentlefsApiClient !== 'function') throw new Error('ESM: client export missing');
-            console.log('ESM import ok');
-          "
-
-      # --access public because SCOPED PACKAGES DEFAULT TO PRIVATE, and publishing a scoped
-      # package without it fails on a free org with an error about paid plans that does not
-      # mention the flag.
-      #
-      # NO CREDENTIAL HERE, DELIBERATELY. Authentication is trusted publishing: npm exchanges
-      # the OIDC token granted by `id-token: write` above for a short-lived publish
-      # credential, scoped to this repository and this workflow filename.
-      #
-      # DO NOT add a NODE_AUTH_TOKEN fallback here. A token in the environment takes
-      # precedence over OIDC, so a "just in case" fallback would silently keep publishing with
-      # a long-lived credential while the workflow appeared to be using trusted publishing.
-      #
-      # npm is also removing the alternative. 2FA-bypass tokens lose sensitive account actions
-      # in Aug 2026 and direct publishing around Jan 2027
-      # (github.blog/changelog/2026-07-08-npm-install-time-security-and-gat-bypass2fa-deprecation),
-      # so OIDC is the only path that does not expire.
-      - name: Publish
-        if: github.event_name == 'push' || inputs.dry_run == false
-        working-directory: sdks/typescript
-        run: npm publish --access public
-
-      # A GitHub Release for the tag, so the repo's Releases page is not empty while npm is
-      # the only record that a version exists. Attaches the tarball, so the exact artifact
-      # that was published is downloadable without trusting the registry to keep it.
-      #
-      # Runs only on a real tag push. `--generate-notes` lets GitHub write the commit list,
-      # and the body adds what a changelog cannot infer: how to install it and where the
-      # source of truth is.
-      - name: Create the GitHub Release
-        if: github.event_name == 'push'
+          set -euo pipefail
+          if npm view "@agentlefs/sdk@$VERSION" dist.integrity --json > /tmp/npm-version.json 2>/tmp/npm-version-error.json; then
+            python3 scripts/release_contract.py integrity "$TARBALL" /tmp/npm-version.json
+            echo "Already published with the same artifact; resuming GitHub release."
+          else
+            # Only a confirmed absent version permits publishing. Network/auth failures fail.
+            if ! python3 -c 'import json; assert json.load(open("/tmp/npm-version.json"))["error"]["code"] == "E404"'; then
+              cat /tmp/npm-version-error.json
+              exit 1
+            fi
+            if ! npm view @agentlefs/sdk dist-tags --json > /tmp/npm-tags.json; then
+              python3 -c 'import json; assert json.load(open("/tmp/npm-tags.json"))["error"]["code"] == "E404"'
+              echo '{}' > /tmp/npm-tags.json
+            fi
+            # This global queue serializes registry writes. A delayed older version gets
+            # an immutable version tag without moving the package's latest tag backwards.
+            npm_tag="$(python3 scripts/release_contract.py publish-tag "$VERSION" /tmp/npm-tags.json)"
+            npm publish "$TARBALL" --access public --tag "$npm_tag"
+          fi
+      - name: Create or complete the GitHub Release
+        if: steps.version.outputs.publish == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
-        working-directory: sdks/typescript
+          VERSION: ${{ steps.version.outputs.version }}
+          TARBALL: ${{ steps.package.outputs.tarball }}
         run: |
-          tarball=$(npm pack --silent)
-          gh release create "${GITHUB_REF_NAME}" "$tarball" \
-            --repo "${GITHUB_REPOSITORY}" \
-            --title "@agentlefs/sdk ${{ steps.version.outputs.version }}" \
-            --generate-notes \
-            --notes "Generated from the agentleFS OpenAPI spec at https://agentlefs.com/v1/openapi.yaml.
-
-          \`\`\`bash
-          npm install @agentlefs/sdk@${{ steps.version.outputs.version }}
-          \`\`\`
-
-          The attached tarball is the exact artifact published to npm."
-
-      - name: Dry run only
-        if: github.event_name == 'workflow_dispatch' && inputs.dry_run == true
-        run: |
-          echo "Dry run - built and packed, nothing published."
-
+          set -euo pipefail
+          if ! gh release view "$GITHUB_REF_NAME" --json tagName > /tmp/sdk-github-release.json; then
+            gh release create "$GITHUB_REF_NAME" --verify-tag --title "@agentlefs/sdk $VERSION" \
+              --generate-notes --notes "Install with npm install @agentlefs/sdk@$VERSION. Generated and tested after the final API release."
+          fi
+          gh release upload "$GITHUB_REF_NAME" "$TARBALL" --clobber
       - name: Summary
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          PUBLISH: ${{ steps.version.outputs.publish }}
         run: |
-          {
-            echo "### @agentlefs/sdk ${{ steps.version.outputs.version }}"
-            echo ""
-            if [ "${GITHUB_EVENT_NAME}" = "push" ]; then
-              echo "Published to npm via trusted publishing, with provenance."
-              echo ""
-              echo "https://www.npmjs.com/package/@agentlefs/sdk/v/${{ steps.version.outputs.version }}"
-            else
-              echo "Dry run. Nothing published."
-            fi
-          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$PUBLISH" = "true" ]; then
+            echo "Published or verified @agentlefs/sdk@$VERSION with the tested artifact: https://www.npmjs.com/package/@agentlefs/sdk/v/$VERSION" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Dry run: tests, build and packed CJS/ESM checks passed; nothing published." >> "$GITHUB_STEP_SUMMARY"
+          fi
