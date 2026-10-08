@@ -1,6 +1,6 @@
 {
   "name": "@agentlefs/sdk",
-  "version": "0.0.0-dev",
+  "version": "0.4.1",
   "description": "Official TypeScript SDK for the agentleFS REST API.",
   "license": "MIT",
   "repository": {
