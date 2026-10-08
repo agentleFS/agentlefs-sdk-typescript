@@ -28,7 +28,11 @@ export interface UpdateDocumentRequest {
      * query parameter. One location replaces both.
      */
     location: string;
-    /** The `ETag` from a read of this document, or `*` to act unconditionally. */
+    /**
+     * The `ETag` from a whole-document read or from a write to it, or `*` to act
+     * unconditionally. A ranged read (`offset`) tags the excerpt it returned, not the
+     * document, so its tag is not a version to send back here.
+     */
     "If-Match": string;
     content: string;
 }

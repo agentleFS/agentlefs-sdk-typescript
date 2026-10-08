@@ -9,6 +9,9 @@ export namespace Error_ {
         /**
          * Branch on this, not on the message.
          *
+         * `UNAVAILABLE` (503, with `Retry-After`) means authorization could not be
+         * decided right now. Retry; it says nothing about whether the resource exists.
+         *
          * There is deliberately no "forbidden" or "permission denied" member.
          * A resource you may not reach is reported as `NOT_FOUND`, identically
          * to one that does not exist.
@@ -24,6 +27,9 @@ export namespace Error_ {
         /**
          * Branch on this, not on the message.
          *
+         * `UNAVAILABLE` (503, with `Retry-After`) means authorization could not be
+         * decided right now. Retry; it says nothing about whether the resource exists.
+         *
          * There is deliberately no "forbidden" or "permission denied" member.
          * A resource you may not reach is reported as `NOT_FOUND`, identically
          * to one that does not exist.
@@ -34,6 +40,7 @@ export namespace Error_ {
             Conflict: "CONFLICT",
             RateLimited: "RATE_LIMITED",
             Internal: "INTERNAL",
+            Unavailable: "UNAVAILABLE",
             Unauthenticated: "UNAUTHENTICATED",
         } as const;
         export type Code = (typeof Code)[keyof typeof Code];

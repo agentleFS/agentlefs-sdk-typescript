@@ -6,7 +6,7 @@
  *         "Idempotency-Key": "Idempotency-Key",
  *         subject_type: "user",
  *         subject_id: "subject_id",
- *         role: "owner",
+ *         role: "viewer",
  *         scope_type: "document",
  *         scope_id: "scope_id"
  *     }
@@ -22,6 +22,7 @@ export interface CreateGrantRequest {
     "Idempotency-Key": string;
     subject_type: CreateGrantRequest.SubjectType;
     subject_id: string;
+    /** viewer, editor or manager. reader, writer and approver are deprecated aliases. */
     role: CreateGrantRequest.Role;
     scope_type: CreateGrantRequest.ScopeType;
     /**
@@ -37,10 +38,14 @@ export namespace CreateGrantRequest {
         Group: "group",
     } as const;
     export type SubjectType = (typeof SubjectType)[keyof typeof SubjectType];
+    /** viewer, editor or manager. reader, writer and approver are deprecated aliases. */
     export const Role = {
-        Owner: "owner",
-        Writer: "writer",
+        Viewer: "viewer",
+        Editor: "editor",
+        Manager: "manager",
         Reader: "reader",
+        Writer: "writer",
+        Approver: "approver",
     } as const;
     export type Role = (typeof Role)[keyof typeof Role];
     export const ScopeType = {

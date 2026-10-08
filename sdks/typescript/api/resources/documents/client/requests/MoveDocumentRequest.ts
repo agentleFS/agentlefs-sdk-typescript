@@ -22,6 +22,8 @@ export interface MoveDocumentRequest {
     /**
      * Its whole location after the move. The containing directory must
      * differ from `from`'s — use `POST /v1/renames` to rename in place.
+     * A document must land inside a folder: the top level holds folders
+     * only, so a document moved to a top-level location is a `400`.
      */
     to: string;
     /** Set true to proceed with a move that widens access. */

@@ -3,7 +3,7 @@
 Official TypeScript SDK for the [agentleFS](https://agentlefs.com) REST API.
 
 > Generated from agentleFS's OpenAPI spec. Do not edit by hand: see the
-> [SDK repository](https://github.com/ContextHubApps/agentlefs-sdk-typescript) for how it is
+> [SDK repository](https://github.com/agentleFS/agentlefs-sdk-typescript) for how it is
 > produced.
 
 ## Install
@@ -23,8 +23,8 @@ const client = new AgentlefsApiClient({ token: process.env.AGENTLEFS_API_KEY! })
 const folders = await client.folders.listFolders();
 
 // Read a document
-const doc = await client.documents.retrieveDocument("onboarding/day-one.md", {
-  folder: "handbook",
+const doc = await client.documents.retrieveDocument({
+  location: "handbook/onboarding/day-one.md",
 });
 ```
 
@@ -53,7 +53,7 @@ Two headers exist so a retry or a race cannot cost you data, and the SDK surface
 
 ## Reference
 
-- Full API reference: [`docs/api.md`](https://github.com/ContextHubApps/agentlefs-sdk-typescript)
+- Full API reference: [`docs/api.md`](https://github.com/agentleFS/agentlefs-sdk-typescript)
 - Machine-readable contract: <https://agentlefs.com/v1/openapi.yaml>
 
 ## License

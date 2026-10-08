@@ -17,9 +17,9 @@ export namespace AccessSubject {
     export type Type = (typeof Type)[keyof typeof Type];
     /** The strongest role they gain or lose. */
     export const Role = {
-        Reader: "reader",
-        Writer: "writer",
-        Owner: "owner",
+        Viewer: "viewer",
+        Editor: "editor",
+        Manager: "manager",
     } as const;
     export type Role = (typeof Role)[keyof typeof Role];
 }

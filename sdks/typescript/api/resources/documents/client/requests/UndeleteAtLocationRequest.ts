@@ -4,11 +4,10 @@
  * @example
  *     {
  *         "Idempotency-Key": "Idempotency-Key",
- *         location: "handbook/onboarding/day-one.md",
- *         content: "content"
+ *         location: "handbook/onboarding/day-one.md"
  *     }
  */
-export interface CreateDocumentRequest {
+export interface UndeleteAtLocationRequest {
     /**
      * A unique string per logical operation, at most 255 printable ASCII
      * characters. Retrying with the same key and body returns the first outcome
@@ -18,9 +17,8 @@ export interface CreateDocumentRequest {
      */
     "Idempotency-Key": string;
     /**
-     * Where the document goes: one whole path, filename included, inside at
-     * least one folder (the top level holds folders only; `day-one.md` is a `400`).
+     * The whole location that was deleted, from the workspace root — a
+     * document, a directory, or a folder.
      */
     location: string;
-    content: string;
 }

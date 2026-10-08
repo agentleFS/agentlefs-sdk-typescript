@@ -25,9 +25,9 @@ export class AccessClient {
 
     /**
      * Returns the grants written directly on this scope. Requires that your key's
-     * principal OWNS the scope: the list of who can reach something is itself
-     * sensitive, so being able to read a document does not entitle you to
-     * enumerate everyone else who can.
+     * principal may share the scope (see `createGrant`): the list of who can reach
+     * something is itself sensitive, so being able to read a document does not
+     * entitle you to enumerate everyone else who can.
      *
      * Inherited grants are not included. Those live on ancestor scopes, and
      * reporting them would turn a question about one document into a partial map
@@ -131,17 +131,25 @@ export class AccessClient {
 
     /**
      * Gives a principal or group a role on a document, folder, or the whole
-     * workspace. Requires that your key's principal OWNS the scope, so you can only
-     * widen access to content that is already yours.
+     * workspace. As in Google Drive, your key's principal needs `manager` on the scope
+     * or a folder above it, or, to grant `viewer` or `editor` on a folder or document,
+     * `editor` there while "Editors can change permissions and share" is on, which it is
+     * unless the owner or a manager turned it off. Only a manager grants `manager`, and
+     * only a manager of the workspace grants on the workspace itself.
+     *
+     * Roles follow Google Drive: `viewer` reads, `editor` reads and edits, and `manager`
+     * also shares and manages access. `reader`, `writer` and `approver` are accepted as
+     * deprecated aliases for the same three and are never returned. `owner` is not a
+     * role: every file and folder has exactly one owner, and it is not granted here.
      *
      * `scope_type` is required and is never inferred from `scope_id`. A document and
      * a directory can share a path, and they are different scopes with different
-     * owners: owning a file called `reports` is not owning `reports/`.
+     * grants: `manager` on a file called `reports` is not `manager` on `reports/`.
      *
      * Subjects are addressed by id and must already exist. This endpoint does not
-     * resolve email addresses, invite people, or create guest access for someone
-     * outside the workspace. Those flows send mail and can admit a stranger, so
-     * they stay in the console where a person performs them deliberately.
+     * resolve email addresses or invite people; those stay in the console where a
+     * person performs them deliberately. Nothing grants access to someone outside
+     * the Organization.
      *
      * @param {AgentlefsApi.CreateGrantRequest} request
      * @param {AccessClient.RequestOptions} requestOptions - Request-specific configuration.
@@ -159,7 +167,7 @@ export class AccessClient {
      *         "Idempotency-Key": "Idempotency-Key",
      *         subject_type: "user",
      *         subject_id: "subject_id",
-     *         role: "owner",
+     *         role: "viewer",
      *         scope_type: "document",
      *         scope_id: "scope_id"
      *     })
@@ -243,8 +251,9 @@ export class AccessClient {
     }
 
     /**
-     * Removes one grant, identified exactly. Requires ownership of the scope, the
-     * same as granting.
+     * Removes one grant, identified exactly. Requires the same as granting that role:
+     * an editor where editors may share removes `viewer` and `editor` grants, and only
+     * a manager removes a `manager`.
      *
      * Revoking takes effect immediately: the subject's next request no longer sees
      * the content. Revoking a grant that does not exist is not an error, it returns
@@ -267,7 +276,7 @@ export class AccessClient {
      *     await client.access.revokeGrant({
      *         subject_type: "user",
      *         subject_id: "subject_id",
-     *         role: "owner",
+     *         role: "viewer",
      *         scope_type: "document",
      *         scope_id: "scope_id"
      *     })
