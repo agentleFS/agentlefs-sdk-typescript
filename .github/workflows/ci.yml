@@ -8,7 +8,7 @@
 # dirty one means the tree and the spec disagree, and the log says which files.
 #
 # It does NOT publish; release.yml does, on a vX.Y.Z tag. Regeneration after an agentleFS
-# release is regenerate.yml, dispatched by the API repo once production serves it.
+# release is regenerate.yml, dispatched with the immutable final release spec.
 name: CI
 
 on:
@@ -38,14 +38,9 @@ jobs:
         with:
           bun-version: "1.3.11"
 
-      # The spec is fetched from the live API rather than read from a checkout. The API repo
-      # is private, so cloning it here would need a cross-repo token; the spec endpoint is
-      # public, so this needs no credential at all.
-      #
-      # A failure here is real and should be loud: it means production is not serving its own
-      # contract, which breaks every SDK regeneration and is worth knowing about immediately.
-      - name: Pull the live spec
-        run: bun run spec:pull
+      # Reproduce from the reviewed committed snapshot, not a newer moving live API.
+      - name: Check the committed spec snapshot
+        run: test -s openapi/v1.yaml
 
       # The repo's own registry may be a private mirror; force the public one so the CLI
       # installs on any runner.
@@ -61,7 +56,10 @@ jobs:
       # deletion as drift. Any divergence between what CI runs and what `bun run generate`
       # runs shows up as a phantom diff.
       - name: Regenerate
-        run: bun run generate
+        run: |
+          export SDK_VERSION="$(bun -e 'console.log(require("./sdks/typescript/package.json").version)')"
+          fern generate --local
+          bun run scripts/write-package-json.ts
 
       # The assertion. A dirty tree means the committed SDK is not what the spec produces.
       - name: Committed SDK is up to date
@@ -82,10 +80,8 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: "1.3.11"
-      # There is no package.json yet (see fern/generators.yml for the generator bug that
-      # blocks it), so this bundles the entry point rather than running a package build.
-      # It still catches the thing worth catching: generated code that does not parse or
-      # has unresolvable imports.
+      # A fast source bundle check catches syntax errors and unresolved imports.
+      # Release automation additionally runs both tsc builds and packed entry-point tests.
       - name: Bundle the entry point
         run: |
           cd sdks/typescript
@@ -101,6 +97,8 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: "1.3.11"
+      - name: Release contract tests
+        run: python3 -m unittest discover -s scripts -p 'test_*.py'
       - name: Tests
         env:
           AGENTLEFS_TOKEN: ${{ secrets.AGENTLEFS_TOKEN }}

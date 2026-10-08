@@ -77,11 +77,12 @@ const packageJson = {
       "tsc -p tsconfig.esm.json && tsc -p tsconfig.cjs.json && node -e \"require('fs').writeFileSync('dist/cjs/package.json', JSON.stringify({type:'commonjs'}) + '\\n')\"",
   },
   devDependencies: {
+    // Exact build tools keep a same-tag retry byte-identical to its npm artifact.
     // @types/node is required, not optional: the generated error classes call
     // Error.captureStackTrace, which is a V8/Node API absent from the default lib. Without
     // it tsc emits output but reports TS2339 on every error class.
-    "@types/node": "^22.0.0",
-    typescript: "^5.7.0",
+    "@types/node": "22.20.5",
+    typescript: "5.9.3",
   },
   // The floor is set by native fetch, which the generated core relies on. Node 18 shipped
   // it unflagged; anything older would fail at runtime rather than at install.

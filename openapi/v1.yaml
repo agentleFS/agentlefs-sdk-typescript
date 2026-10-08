@@ -1,0 +1,1288 @@
+openapi: 3.1.0
+info:
+  title: agentleFS API
+  version: "1.0.0"
+  description: |
+    Programmatic access to your organization's context: documents, folders, and
+    search. Built for ordinary server-side application code, not for an LLM agent
+    (agents use the MCP endpoint instead).
+
+    ## Authentication
+
+    Every request carries an API key as a bearer token:
+
+        Authorization: Bearer afs_...
+
+    Keys are minted in the console (Access, open a principal, Tokens, Mint, with
+    "enable for the REST API" ticked). They are the ONLY accepted credential: a
+    browser session token is rejected, and so is an agent token that was not
+    enabled for this API.
+
+    A key is long-lived and does not expire unless you choose an expiry when
+    minting it. Revocation is therefore the control for making a key stop
+    working, and it takes effect on the next request, with no cache to wait out.
+
+    ## Determinism
+
+    This API is designed so that application code gets a predictable answer:
+
+    - **Typed errors.** Every failure carries a stable `code` you can branch on.
+    - **Idempotency.** Creates require an `Idempotency-Key`, so a retry after a
+      network failure cannot produce a duplicate.
+    - **Optimistic concurrency.** Updates and deletes require `If-Match` with the
+      ETag from a read or from the write that put the version there, so a concurrent
+      write is refused rather than clobbered.
+    - **Cursor pagination.** Lists return a `next_cursor`; there are no offsets to
+      drift and no totals to go stale.
+
+    ## Denied and missing are the same answer
+
+    This is the most important thing to understand before you integrate.
+
+    If you request a document you are not permitted to read, you receive `404` with
+    exactly the body you would receive for a document that does not exist. This is
+    deliberate and it is not a bug: distinguishing the two would let any key holder
+    map content they cannot read, one request at a time.
+
+    There is no `403` on any content route and no error code meaning "forbidden".
+    A `404` means "not available to you", which covers both cases and does not tell
+    you which. If you expected content and got a `404`, the question to ask is
+    whether your key's principal has been granted access, not whether the path is
+    right.
+
+    For the same reason, responses never include counts of content you cannot see:
+    no result totals, and no "N hidden items".
+
+servers:
+  # agentlefs.com, NOT tryagentlefs.com. The latter has no DNS at all (curl exit 6, no such
+  # host), and it reached this file through a find-and-replace during the rebrand: the
+  # comment here used to say "api.trycontexthub.com does not resolve", and renaming
+  # trycontexthub -> tryagentlefs rewrote the bare domain along with it into a host that was
+  # never registered.
+  #
+  # WHY THIS FIELD IS WORTH A LONG COMMENT. An SDK ships the first server entry as its
+  # default base URL, so a wrong value here is a client that cannot reach the API in every
+  # generated language at once. It is also the field least likely to be caught by our own
+  # tests, which all use localhost.
+  #
+  # A redirect would not be good enough either, even though the retired domain has one.
+  # fetch and browsers STRIP the Authorization header across a cross-origin redirect, by
+  # design, so a client pointed at a redirecting host arrives with no credential and gets a
+  # 401 saying "missing bearer token" while holding a valid key. Verified against
+  # production: the retired host reports missing-token, this one reports
+  # invalid-credential, which is how you can tell the token actually arrived.
+  - url: https://agentlefs.com
+    description: Production
+  - url: http://localhost:8787
+    description: Local development
+
+security:
+  - ApiKeyAuth: []
+
+tags:
+  - name: Documents
+  - name: Folders
+  - name: Access
+  - name: Search
+  - name: Service
+
+paths:
+  /v1/health:
+    get:
+      operationId: checkHealth
+      tags: [Service]
+      summary: Liveness check
+      description: |
+        Reports that the service is serving, and which build is serving it. Requires no
+        credential and touches no tenant data, so it is safe for an uptime monitor — and
+        `build` makes "did that merge actually deploy?" one unauthenticated request (#786).
+      security: []
+      responses:
+        "200":
+          description: Service is up
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthStatus'
+
+  /v1/documents:
+    get:
+      operationId: listDocuments
+      tags: [Documents]
+      summary: List documents in a folder or directory
+      parameters:
+      - $ref: "#/components/parameters/LocationQuery"
+      - name: type
+        in: query
+        description: Restrict to one document type.
+        schema: {type: string}
+      - name: label
+        in: query
+        description: |
+          Restrict to documents carrying this label. Labels drive discovery only;
+          they carry no access authority whatsoever.
+        schema: {type: string}
+      - $ref: "#/components/parameters/Limit"
+      - $ref: "#/components/parameters/Cursor"
+      responses:
+        "200":
+          description: |
+            A page of documents you can read. Documents you cannot read are absent
+            and are not counted anywhere in the response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DocumentList'
+        "400": {$ref: "#/components/responses/InvalidRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "429": {$ref: "#/components/responses/RateLimited"}
+
+    post:
+      operationId: createDocument
+      tags: [Documents]
+      summary: Create a document
+      description: |
+        Creates a document and grants your key's principal write and read access to
+        it, so you can read back what you just wrote.
+
+        `Idempotency-Key` is required. Reusing a key with an identical body returns
+        the original outcome with `replayed: true`; reusing it with a different body
+        is a `409`.
+      parameters:
+      - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [location, content]
+              properties:
+                location:
+                  type: string
+                  description: |
+                    Where the document goes: one whole path, filename included, inside at
+                    least one folder (the top level holds folders only; `day-one.md` is a `400`).
+                  examples: ["handbook/onboarding/day-one.md"]
+                content: {type: string}
+      responses:
+        "201":
+          description: Created. The `ETag` header is the version for later updates.
+          headers:
+            ETag: {$ref: "#/components/headers/ETag"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/WriteResult"}
+        "400": {$ref: "#/components/responses/InvalidRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "404":
+          description: |
+            Not available to you. Either the folder does not exist or your key is
+            not permitted to write there. These are the same answer on purpose.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Error"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "429": {$ref: "#/components/responses/RateLimited"}
+
+  /v1/documents/{location}:
+    parameters:
+    - name: location
+      in: path
+      required: true
+      description: |
+        The document's whole path from the workspace root, filename included,
+        URL-encoded once.
+
+        The path separators may be sent either way. `handbook/onboarding/day-one.md`
+        and `handbook%2Fonboarding%2Fday-one.md` address the same document, because
+        the value is decoded exactly once before it is used. Write whichever is more
+        natural: a handwritten request usually uses literal separators, while a
+        generated SDK client will percent-encode them, since OpenAPI requires a path
+        parameter's reserved characters to be escaped.
+
+        What is rejected, in either spelling, is a path that does not mean one
+        definite location: an empty segment (`//`) or a relative segment (`.`, `..`)
+        is a `400`, whether written literally or percent-encoded.
+
+        This was the document's path WITHIN a folder, alongside a required `folder`
+        query parameter. One location replaces both.
+      schema: {type: string}
+      examples: ["handbook/onboarding/day-one.md"]
+
+    get:
+      operationId: retrieveDocument
+      tags: [Documents]
+      summary: Read a document
+      description: |
+        Returns the document as JSON by default. Pass `download=1` to receive the raw
+        file instead — the stored body for a text document, or the original bytes for a
+        binary asset — with a `Content-Disposition: attachment` filename, suitable for
+        saving to disk. The reach that governs the JSON read governs the download.
+      parameters:
+      - name: offset
+        in: query
+        description: Byte offset, for paging through a document larger than the read cap.
+        schema: {type: integer, minimum: 0}
+      - name: download
+        in: query
+        description: |
+          Set to `1` to download the raw file (body bytes with a `Content-Disposition`
+          attachment) rather than the JSON envelope. `offset`, the `ETag`, and the
+          truncation fields do not apply to a download.
+        schema: {type: string, enum: ["1"]}
+      responses:
+        "200":
+          description: |
+            The document body as JSON, or — when `download=1` — the raw file as an
+            attachment.
+          headers:
+            ETag: {$ref: "#/components/headers/ETag"}
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DocumentContent'
+            application/octet-stream:
+              schema: {type: string, format: binary}
+        "400": {$ref: "#/components/responses/InvalidRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "429": {$ref: "#/components/responses/RateLimited"}
+
+    put:
+      operationId: updateDocument
+      tags: [Documents]
+      summary: Update a document
+      description: |
+        `If-Match` is required. Send the `ETag` from a read, or the one the last
+        write returned, to update only if the document has not changed since — or `*`
+        to overwrite unconditionally.
+      parameters:
+      - $ref: "#/components/parameters/IfMatch"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [content]
+              properties:
+                content: {type: string}
+      responses:
+        "200":
+          description: Updated.
+          headers:
+            ETag: {$ref: "#/components/headers/ETag"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/WriteResult"}
+        "400":
+          description: |
+            Malformed request, or `If-Match` absent. Requiring the header is a
+            property of this endpoint, so this response says nothing about whether
+            the document exists.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Error"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409":
+          description: |
+            The document changed since the version you supplied. Re-read it, decide
+            whether your change still applies, and retry.
+
+            Note the ordering: a caller who cannot read the document receives `404`
+            here, never `409`. A conflict response is only ever returned to someone
+            who has already proven read access, so it cannot be used to detect
+            existence.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Error"}
+        "429": {$ref: "#/components/responses/RateLimited"}
+
+    delete:
+      operationId: deleteDocument
+      tags: [Documents]
+      summary: Delete a document
+      description: |
+        Requires `manager` on the document, a higher bar than updating it. A delete is
+        the one operation with no inverse: an update leaves the prior version in
+        history and a rename relocates content that still exists, but a delete ends
+        the object.
+
+        `If-Match` is required, for the same reason as on update.
+      parameters:
+      - $ref: "#/components/parameters/IfMatch"
+      responses:
+        "200":
+          description: Deleted.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeleteResult'
+        "400": {$ref: "#/components/responses/InvalidRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "429": {$ref: "#/components/responses/RateLimited"}
+
+  /v1/folders:
+    get:
+      operationId: listFolders
+      tags: [Folders]
+      summary: List folders
+      description: |
+        Lists one level. Omit `parent` for the top level, or pass a folder id to list
+        inside it.
+      parameters:
+      - name: parent
+        in: query
+        description: Folder id to list inside, for example `handbook` or `handbook/vendor`.
+        schema: {type: string}
+      - $ref: "#/components/parameters/Limit"
+      - $ref: "#/components/parameters/Cursor"
+      responses:
+        "200":
+          description: A page of folders you can reach.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FolderList'
+        "400": {$ref: "#/components/responses/InvalidRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "429": {$ref: "#/components/responses/RateLimited"}
+
+    post:
+      operationId: createFolder
+      tags: [Folders]
+      summary: Create a folder
+      description: |
+        Creates a folder and grants your key's principal `manager` on it.
+
+        Nesting is expressed in the location itself: `handbook` makes a top-level
+        folder, `handbook/vendor/contracts` makes a nested one, creating whatever is
+        missing along the way. This took a `folder` name that could not contain a
+        slash plus an optional `path` to nest under it — a caller had to decide where
+        the folder stopped and the directory began, for a distinction storage does not
+        make. Each segment is still a permission scope.
+      parameters:
+      - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [location]
+              properties:
+                location:
+                  type: string
+                  description: |
+                    Where the folder goes, as one whole path from the workspace root.
+                  examples: ["handbook/vendor/contracts"]
+      responses:
+        "201":
+          description: Created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FolderCreated'
+        "400": {$ref: "#/components/responses/InvalidRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "429": {$ref: "#/components/responses/RateLimited"}
+
+  /v1/folders/export:
+    get:
+      operationId: exportFolder
+      tags: [Folders]
+      summary: Download a folder as a zip
+      description: |
+        Returns a zip archive of everything under `location` that your key's principal
+        can read, laid out by path relative to the folder. Each file is filtered
+        through the same reach that governs a read, so a document you cannot read is
+        not in the archive — the zip never reveals the existence of content behind an
+        ACL.
+
+        The archive may hold FEWER files than the folder does: an asset over the
+        per-file limit, a blob that cannot be read, or a folder past the archive's size
+        or file-count caps. That is a 200, not an error. Read `x-archive-omitted` to
+        detect it rather than unzipping — it is `0` on a complete archive. When it is
+        non-zero the archive also contains `_OMITTED.txt` naming each missing file and
+        why, and those files can be fetched in full one at a time with
+        `GET /v1/documents/{location}?download=1`.
+
+        An omission is never a permissions signal. Content behind an ACL is absent from
+        the archive AND from the manifest, exactly as it is absent from a listing.
+
+        `location` is given in the query string, like `parent` on `GET /v1/folders`.
+      parameters:
+      - name: location
+        in: query
+        required: true
+        description: The folder to export, as a whole path from the workspace root.
+        schema: {type: string}
+        examples: ["handbook/vendor"]
+      responses:
+        "200":
+          description: A zip archive of the readable contents, possibly partial.
+          headers:
+            x-archive-entries:
+              description: Files written into the archive.
+              schema: {type: integer}
+            x-archive-omitted:
+              description: >-
+                Readable files left out of the archive. `0` on a complete one. Never
+                counts content the caller may not read.
+              schema: {type: integer}
+          content:
+            application/zip:
+              schema: {type: string, format: binary}
+        "400": {$ref: "#/components/responses/InvalidRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "429": {$ref: "#/components/responses/RateLimited"}
+
+  /v1/grants:
+    get:
+      operationId: listGrants
+      tags: [Access]
+      summary: List what is granted on a scope
+      description: |
+        Returns the grants written directly on this scope. Requires that your key's
+        principal may share the scope (see `createGrant`): the list of who can reach
+        something is itself sensitive, so being able to read a document does not
+        entitle you to enumerate everyone else who can.
+
+        Inherited grants are not included. Those live on ancestor scopes, and
+        reporting them would turn a question about one document into a partial map
+        of the tree above it.
+      parameters:
+      - $ref: "#/components/parameters/ScopeType"
+      - $ref: "#/components/parameters/ScopeId"
+      responses:
+        "200":
+          description: The grants on this scope.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GrantList'
+        "400": {$ref: "#/components/responses/InvalidRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "429": {$ref: "#/components/responses/RateLimited"}
+
+    post:
+      operationId: createGrant
+      tags: [Access]
+      summary: Grant a role on a scope
+      description: |
+        Gives a principal or group a role on a document, folder, or the whole
+        workspace. As in Google Drive, your key's principal needs `manager` on the scope
+        or a folder above it, or, to grant `viewer` or `editor` on a folder or document,
+        `editor` there while "Editors can change permissions and share" is on, which it is
+        unless the owner or a manager turned it off. Only a manager grants `manager`, and
+        only a manager of the workspace grants on the workspace itself.
+
+        Roles follow Google Drive: `viewer` reads, `editor` reads and edits, and `manager`
+        also shares and manages access. `reader`, `writer` and `approver` are accepted as
+        deprecated aliases for the same three and are never returned. `owner` is not a
+        role: every file and folder has exactly one owner, and it is not granted here.
+
+        `scope_type` is required and is never inferred from `scope_id`. A document and
+        a directory can share a path, and they are different scopes with different
+        grants: `manager` on a file called `reports` is not `manager` on `reports/`.
+
+        Subjects are addressed by id and must already exist. This endpoint does not
+        resolve email addresses or invite people; those stay in the console where a
+        person performs them deliberately. Nothing grants access to someone outside
+        the Organization.
+      parameters:
+      - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [subject_type, subject_id, role, scope_type, scope_id]
+              properties:
+                subject_type: {type: string, enum: [user, group]}
+                subject_id: {type: string}
+                role:
+                  type: string
+                  enum: [viewer, editor, manager, reader, writer, approver]
+                  description: viewer, editor or manager. reader, writer and approver are deprecated aliases.
+                scope_type: {type: string, enum: [document, folder, tenant]}
+                scope_id:
+                  type: string
+                  description: |
+                    `handbook` for a folder, `handbook/policies` for a nested one,
+                    `handbook/policies/leave.md` for a document.
+      responses:
+        "201":
+          description: Granted. Re-granting the same role is harmless.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Grant"}
+        "400": {$ref: "#/components/responses/InvalidRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "429": {$ref: "#/components/responses/RateLimited"}
+
+    delete:
+      operationId: revokeGrant
+      tags: [Access]
+      summary: Revoke a grant
+      description: |
+        Removes one grant, identified exactly. Requires the same as granting that role:
+        an editor where editors may share removes `viewer` and `editor` grants, and only
+        a manager removes a `manager`.
+
+        Revoking takes effect immediately: the subject's next request no longer sees
+        the content. Revoking a grant that does not exist is not an error, it returns
+        `revoked: false`, so this is safe to call without checking first.
+
+        No `Idempotency-Key` is needed, since repeating a revoke has no additional
+        effect.
+      parameters:
+      - name: subject_type
+        in: query
+        required: true
+        schema: {type: string, enum: [user, group]}
+      - name: subject_id
+        in: query
+        required: true
+        schema: {type: string}
+      - name: role
+        in: query
+        required: true
+        description: viewer, editor or manager. reader, writer and approver are deprecated aliases.
+        schema: {type: string, enum: [viewer, editor, manager, reader, writer, approver]}
+      - $ref: "#/components/parameters/ScopeType"
+      - $ref: "#/components/parameters/ScopeId"
+      responses:
+        "200":
+          description: |
+            Processed. `revoked` says whether a grant was actually removed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RevokeResult'
+        "400": {$ref: "#/components/responses/InvalidRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "429": {$ref: "#/components/responses/RateLimited"}
+
+  /v1/renames:
+    post:
+      operationId: renameDocument
+      tags: [Documents]
+      summary: Rename a document or directory in place
+      description: |
+        Renames without relocating. `from` is the whole location being renamed; `name`
+        is the new NAME, never a path: a name may not contain a slash, because a slash
+        would manufacture an intermediate folder and that folder would be a permission
+        scope. Use `POST /v1/moves` to relocate.
+
+        Authorization is stricter than a write. The whole subtree under `from` must
+        be yours to change, including any part of it you cannot see, for the same
+        reason delete is all-or-nothing: renaming what you cannot read is acting on
+        what you cannot read.
+
+        A rename that changes who can reach the content is refused unless
+        acknowledged. See `POST /v1/moves` for how that works, since it is the same
+        gate.
+      parameters:
+      - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [from, name]
+              properties:
+                from:
+                  type: string
+                  description: |
+                    Current whole location of the document or directory, from the
+                    workspace root.
+                  examples: ["handbook/onboarding/day-one.md"]
+                name:
+                  type: string
+                  description: New name. No slashes.
+                  examples: ["day-1.md"]
+                acknowledge_access_change:
+                  type: boolean
+                  description: |
+                    Set true to proceed with a rename that widens access, after the
+                    reported change has been reviewed.
+      responses:
+        "200":
+          description: Renamed.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/MoveResult"}
+        "400": {$ref: "#/components/responses/InvalidRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/MoveConflict"}
+        "429": {$ref: "#/components/responses/RateLimited"}
+
+  /v1/undeletes:
+    post:
+      operationId: undeleteAtLocation
+      tags: [Documents]
+      summary: Undo the last delete at a location
+      description: |
+        Restores exactly what one delete removed, at the version it had, with its
+        sharing intact.
+
+        Deleting does not destroy anything. A document's head moves to a commit that
+        records the deletion, so the content, its history, its comments and the grants
+        on it are all still attached to the same document — undoing moves the head
+        back. Nothing is reassembled and nothing is copied.
+
+        `location` is whatever was deleted: a document, a directory, or a whole
+        folder. One delete is one batch however deep it went, so undoing a folder
+        restores the folder and everything that was in it.
+
+        ## What "the last delete" means
+
+        Deletes performed at different moments are different batches. Undoing restores
+        the most recent one at this location, not everything ever deleted here.
+
+        Undoing twice is harmless: the second call finds nothing left to restore and
+        reports `restored: 0`. A location that never had a delete is a `404`.
+
+        ## Two cases it will not resurrect
+
+        A document that was **written over** after being deleted is not restored — the
+        content at that path is a newer version of the same document, and an undo must
+        never replace live content with a version somebody deleted.
+
+        A document deleted before it ever had content has no version to become current
+        again. Those are counted in `unrestorable` rather than silently skipped.
+
+        Authorized as the delete it reverses: an undo makes content visible again, so
+        it requires the same right that removing it did.
+      parameters:
+      - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [location]
+              properties:
+                location:
+                  type: string
+                  description: |
+                    The whole location that was deleted, from the workspace root — a
+                    document, a directory, or a folder.
+                  examples: ["handbook/onboarding/day-one.md"]
+      responses:
+        "200":
+          description: Restored.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  location: {type: string}
+                  restored:
+                    type: integer
+                    description: How many documents were made current again.
+                  unrestorable:
+                    type: integer
+                    description: |
+                      Documents in the batch with no earlier version to return to.
+                  directories:
+                    type: integer
+                    description: |
+                      How many directories the delete removed came back with it, empty
+                      ones included. Undoing the delete of an empty directory restores no
+                      documents and one directory, so this is what tells that apart from
+                      an undo that found nothing to restore.
+        "400": {$ref: "#/components/responses/InvalidRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "429": {$ref: "#/components/responses/RateLimited"}
+
+  /v1/moves:
+    post:
+      operationId: moveDocument
+      tags: [Documents]
+      summary: Move a document or directory to a different folder
+      description: |
+        Relocates content between folders. Authorized on both sides: the source
+        subtree must be yours to change (all of it, including parts you cannot see),
+        and you must be able to write at the destination. Without the destination
+        half, a move would be a way to place content into a folder you could not
+        otherwise write to.
+
+        ## Moves can change who can see things
+
+        Access follows the path here, so relocating content can widen or narrow who
+        reaches it. A move that WIDENS access is refused with `409` and a report of
+        what would change. Re-send with `acknowledge_access_change: true` once that
+        change has been reviewed.
+
+        Two distinct refusals, told apart by the `acknowledgeable` field rather than
+        by the status code:
+
+        - `acknowledgeable: true` means you may proceed once you have reviewed the
+          change.
+        - `acknowledgeable: false` means widening here would be a grant you are not
+          permitted to make at the destination. No acknowledgement will help; you
+          need access granted at the destination first.
+
+        A narrowing move is reported but never gated: taking access away is not the
+        direction that needs a second opinion.
+
+        The reported subjects are bounded by what your own credential can already
+        discover. Counts of subjects you cannot see are not included.
+      parameters:
+      - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [from, to]
+              properties:
+                from:
+                  type: string
+                  description: |
+                    Current whole location of what is moving, from the workspace root.
+                  examples: ["drafts/q3-plan.md"]
+                to:
+                  type: string
+                  description: |
+                    Its whole location after the move. The containing directory must
+                    differ from `from`'s — use `POST /v1/renames` to rename in place.
+                    A document must land inside a folder: the top level holds folders
+                    only, so a document moved to a top-level location is a `400`.
+                  examples: ["handbook/planning/q3-plan.md"]
+                acknowledge_access_change:
+                  type: boolean
+                  description: Set true to proceed with a move that widens access.
+      responses:
+        "200":
+          description: Moved.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/MoveResult"}
+        "400":
+          description: |
+            Malformed request, or `from` and `to` share a containing directory (use
+            `POST /v1/renames` instead).
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Error"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/MoveConflict"}
+        "429": {$ref: "#/components/responses/RateLimited"}
+
+  /v1/search:
+    get:
+      operationId: search
+      tags: [Search]
+      summary: Search your organization's context
+      description: |
+        Searches only what your key can read. Results are never padded with content
+        you lack access to, and the response does not report how much was filtered.
+      parameters:
+      - name: q
+        in: query
+        required: true
+        schema: {type: string}
+      - name: mode
+        in: query
+        description: |
+          `auto` (default) picks a strategy from the query shape. `all` runs
+          several and merges. `titles`, `labels`, `text`, and `meaning` force one.
+        schema:
+          type: string
+          enum: [all, auto, titles, labels, text, meaning]
+      - name: location
+        in: query
+        description: |
+          Restrict to one folder or directory, as a whole path from the workspace
+          root. Omit to sweep everything you reach.
+        schema: {type: string}
+      - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: Search results.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SearchResults'
+        "400": {$ref: "#/components/responses/InvalidRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "429": {$ref: "#/components/responses/RateLimited"}
+
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: http
+      scheme: bearer
+      description: |
+        A agentleFS API key, prefixed `afs_`. Mint and revoke keys in the console.
+        Browser session tokens are not accepted on this API. Keys minted before the
+        agentleFS rename carry the older `cht_` prefix and are still accepted.
+
+  parameters:
+    LocationQuery:
+      name: location
+      in: query
+      required: true
+      description: |
+        Where to act, as ONE whole path from the workspace root — `sales` for a
+        top-level folder, `sales/eu` for a directory inside one. There is no separate
+        `folder` parameter: a location says where something is in a single string, so
+        a caller never has to decide where the folder stops and the path begins.
+      schema: {type: string}
+      examples: ["sales/eu"]
+    Limit:
+      name: limit
+      in: query
+      description: Maximum items to return. Clamped to the server maximum (50).
+      schema: {type: integer, minimum: 1, maximum: 50}
+    Cursor:
+      name: cursor
+      in: query
+      description: |
+        The `next_cursor` from a previous response. Cursors are signed and bound to
+        your key and to the exact query that produced them; a modified or borrowed
+        cursor is rejected with `400` rather than being reinterpreted.
+      schema: {type: string}
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: |
+        A unique string per logical operation, at most 255 printable ASCII
+        characters. Retrying with the same key and body returns the first outcome
+        instead of acting twice. Idempotency keys are scoped to your key's principal
+        and expire after 24 hours; that expiry is on the replay key, not on your API
+        key.
+      schema: {type: string, maxLength: 255}
+    ScopeType:
+      name: scope_type
+      in: query
+      required: true
+      description: |
+        Which kind of thing `scope_id` names. Required and never inferred: a document
+        and a directory can share a path and are different scopes with different
+        grants.
+      schema: {type: string, enum: [document, folder, tenant]}
+    ScopeId:
+      name: scope_id
+      in: query
+      required: true
+      description: The scope, slash-joined. `handbook`, `handbook/policies`, `handbook/leave.md`.
+      schema: {type: string}
+    IfMatch:
+      name: If-Match
+      in: header
+      required: true
+      description: |
+        The `ETag` from a whole-document read or from a write to it, or `*` to act
+        unconditionally. A ranged read (`offset`) tags the excerpt it returned, not the
+        document, so its tag is not a version to send back here.
+      schema: {type: string}
+
+  headers:
+    ETag:
+      description: |
+        This document's version. Pass it back as `If-Match` to update or delete
+        safely. The tag a write returns is the version to send back on the next one:
+        it names what was STORED, which is not always the bytes that were sent, since
+        a read re-attaches the document's frontmatter (#820).
+
+        One exception, and it is pre-existing rather than new: on a RANGED read
+        (`offset`) this tag names the excerpt that was returned, not the document, so
+        it is refused as `If-Match`. Read the document whole to get a version you can
+        write back with.
+
+        It can also be ABSENT on a write that succeeded, when the version could not be
+        read back afterwards — a `200` or `201` without this header means the write
+        landed and there is no tag to carry forward, so `GET` the document for one.
+        Treat it as optional on a response rather than guaranteed.
+
+        It is derived from the document's own content, so it changes only when THIS
+        document changes. It is not a repository-wide revision and it will not move
+        because something else in the folder was edited.
+      schema: {type: string}
+
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message, request_id]
+          properties:
+            code:
+              type: string
+              enum:
+              - NOT_FOUND
+              - INVALID_REQUEST
+              - CONFLICT
+              - RATE_LIMITED
+              - INTERNAL
+              - UNAVAILABLE
+              - UNAUTHENTICATED
+              description: |
+                Branch on this, not on the message.
+
+                `UNAVAILABLE` (503, with `Retry-After`) means authorization could not be
+                decided right now. Retry; it says nothing about whether the resource exists.
+
+                There is deliberately no "forbidden" or "permission denied" member.
+                A resource you may not reach is reported as `NOT_FOUND`, identically
+                to one that does not exist.
+            message:
+              type: string
+              description: Human-readable. Not stable; do not parse it.
+            request_id:
+              type: string
+              description: Also returned as `X-Request-Id`. Quote it in support requests.
+
+    DocumentSummary:
+      type: object
+      properties:
+        location:
+          type: string
+          description: The whole path from the workspace root.
+        type: {type: string}
+        title: {type: [string, "null"]}
+        summary: {type: [string, "null"]}
+        labels:
+          type: array
+          items: {type: string}
+          description: Discovery metadata only. Labels confer no access.
+        is_asset:
+          type: boolean
+          description: True for binary assets, whose bodies are not returned as text.
+        mime: {type: [string, "null"]}
+        size_bytes: {type: [integer, "null"]}
+
+    Folder:
+      type: object
+      properties:
+        id:
+          type: string
+          description: |
+            The addressable folder id, and the same string a permission grant names.
+        location:
+          type: string
+          description: |
+            The folder's whole path from the workspace root — the same string as `id`.
+            This was `folder` plus a `path` within it; both said what `id` already says.
+
+    SearchHit:
+      type: object
+      properties:
+        location:
+          type: string
+          description: The whole path from the workspace root.
+        title: {type: [string, "null"]}
+        type: {type: string}
+        labels:
+          type: array
+          items: {type: string}
+        is_asset: {type: boolean}
+        access:
+          type: string
+          description: The strongest access you hold here. Every hit is at least readable.
+        snippet: {type: [string, "null"]}
+        line:
+          type: [integer, "null"]
+          description: 1-indexed line number, text mode only.
+        score:
+          type: [number, "null"]
+          description: Cosine similarity, meaning mode only.
+
+    WriteResult:
+      type: object
+      properties:
+        location:
+          type: string
+          description: The whole path from the workspace root.
+        commit:
+          type: [string, "null"]
+          description: |
+            The commit this write created, or `null` when it created none. The stored
+            document is its body, so a write whose body comes out byte-identical
+            allocates no commit however much frontmatter it moves, and `null` says so
+            rather than naming a commit that is not this document's. A replayed
+            response carries whatever the original write reported.
+        replayed:
+          type: boolean
+          description: Present and true when this was an idempotent replay.
+
+    Grant:
+      type: object
+      properties:
+        subject_type: {type: string, enum: [user, group]}
+        subject_id: {type: string}
+        role: {type: string, enum: [viewer, editor, manager]}
+        scope_type: {type: string, enum: [document, folder, tenant]}
+        scope_id: {type: string}
+        created_at: {type: string, format: date-time}
+        replayed:
+          type: boolean
+          description: Present and true when this was an idempotent replay.
+
+    MoveResult:
+      type: object
+      properties:
+        from:
+          type: string
+          description: The whole location before the operation.
+        to:
+          type: string
+          description: |
+            The whole location after it. A rename and a move report the same two
+            fields; the three folder fields that used to sit beside them said which
+            operation had happened, which `from` and `to` already show.
+        commit: {type: [string, "null"]}
+        changed:
+          type: array
+          description: |
+            Every path that actually moved. A directory rename or move reports one
+            entry per document beneath it, so this is how you learn what a subtree
+            operation touched.
+          items:
+            type: object
+            properties:
+              from: {type: string}
+              to: {type: string}
+        replayed:
+          type: boolean
+          description: Present and true when this was an idempotent replay.
+
+    AccessChange:
+      type: object
+      description: |
+        What a move or rename would change about who can reach the content. Bounded
+        by what your credential can already discover: subjects you cannot see are
+        not listed, and not counted either.
+      properties:
+        widens:
+          type: boolean
+          description: Someone gains access. This is the direction that is gated.
+        narrows:
+          type: boolean
+          description: Someone loses access. Reported, never gated.
+        gained:
+          type: array
+          items: {$ref: "#/components/schemas/AccessSubject"}
+        lost:
+          type: array
+          items: {$ref: "#/components/schemas/AccessSubject"}
+
+    AccessSubject:
+      type: object
+      properties:
+        type: {type: string, enum: [user, group]}
+        id: {type: string}
+        role:
+          type: string
+          enum: [viewer, editor, manager]
+          description: The strongest role they gain or lose.
+        via:
+          type: string
+          description: The scope the grant sits on, so the change can be explained.
+
+    HealthStatus:
+      type: object
+      required: [status, build]
+      properties:
+        status: {type: string, const: ok}
+        build:
+          type: string
+          description: |
+            The build this process is serving — the deploying platform's commit sha, or an
+            explicit release name where one is set. `unknown` when nothing stamped the build,
+            which is every local run; the field is always present, so an unstamped build can
+            be told apart from a deployment that predates the field (#786).
+          example: dad4d5bfeedfacedeadbeef0123456789abcdef0
+    DocumentList:
+      type: object
+      required: [documents, next_cursor]
+      properties:
+        documents:
+          type: array
+          items: {$ref: "#/components/schemas/DocumentSummary"}
+        next_cursor:
+          type: [string, "null"]
+          description: |
+            Pass as `cursor` to fetch the next page. `null` means this is
+            the last page. A cursor is bound to the query that produced
+            it and to your key: reusing one with different filters is
+            rejected rather than silently reinterpreted.
+    DocumentContent:
+      type: object
+      required: [location, content, revision]
+      properties:
+        location:
+          type: string
+          description: The whole path from the workspace root.
+        content: {type: string}
+        truncated:
+          type: boolean
+          description: True when the body was capped; use `next_offset` to continue.
+        total_bytes: {type: [integer, "null"]}
+        next_offset: {type: [integer, "null"]}
+        revision:
+          type: string
+          enum: [committed, live]
+          description: |
+            `live` means an unsaved editing session supplied this body. If
+            your pipeline requires committed content, check this: acting
+            on a draft as though it were final is a real correctness bug.
+    DeleteResult:
+      type: object
+      properties:
+        location:
+          type: string
+          description: The whole path from the workspace root.
+        deleted: {type: boolean, const: true}
+        commit: {type: [string, "null"]}
+    FolderList:
+      type: object
+      required: [folders, next_cursor]
+      properties:
+        folders:
+          type: array
+          items: {$ref: "#/components/schemas/Folder"}
+        next_cursor: {type: [string, "null"]}
+    FolderCreated:
+      type: object
+      properties:
+        location:
+          type: string
+          description: The folder's whole path from the workspace root.
+        id:
+          type: string
+          description: |
+            The folder id, which is also the scope a grant names — the same string as
+            `location`. Kept because it is what `GET /v1/folders` calls it.
+        commit: {type: string}
+    GrantList:
+      type: object
+      properties:
+        scope_type: {type: string}
+        scope_id: {type: string}
+        grants:
+          type: array
+          items: {$ref: "#/components/schemas/Grant"}
+    RevokeResult:
+      allOf:
+      - $ref: "#/components/schemas/Grant"
+      - type: object
+        properties:
+          revoked: {type: boolean}
+    SearchResults:
+      type: object
+      properties:
+        query: {type: string}
+        mode_requested: {type: string}
+        mode_effective:
+          type: array
+          items: {type: string}
+          description: Which strategies actually ran.
+        degraded:
+          type: boolean
+          description: |
+            True when semantic search could not run because this
+            deployment has no vector index. Check it: a lexical-only
+            result to a semantic question can look complete and not be.
+        truncated:
+          type: boolean
+          description: |
+            True when the sweep cap was reached, so results are partial.
+            A short result must never look complete.
+        hits:
+          type: array
+          items: {$ref: "#/components/schemas/SearchHit"}
+  responses:
+    NotFound:
+      description: |
+        Not available to you.
+
+        This is returned both when the resource does not exist and when your key is
+        not permitted to reach it, with an identical body in both cases. If you
+        believe the path is correct, check the grants on your key's principal.
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/Error"}
+    InvalidRequest:
+      description: "Malformed request: a missing field, a bad path, or an invalid cursor."
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/Error"}
+    Unauthenticated:
+      description: |
+        Missing, malformed, revoked, or expired API key. Also returned when a
+        credential that is not an API key is presented.
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/Error"}
+    Conflict:
+      description: |
+        The request was well formed and refused because of state: a stale `If-Match`,
+        a concurrent change, a connector-managed path, or an `Idempotency-Key` reused
+        with a different body.
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/Error"}
+    MoveConflict:
+      description: |
+        The operation was refused on state. Either the folder changed while the
+        request was being authorized (retry), a name already exists at the
+        destination, or the operation would change who can reach the content.
+
+        In the access-change case the body carries `access_change` and
+        `acknowledgeable`. When `acknowledgeable` is true, re-send with
+        `acknowledge_access_change: true`. When it is false, widening here is a grant
+        you cannot make at the destination and no acknowledgement will succeed.
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              error:
+                type: object
+                properties:
+                  code: {type: string, const: CONFLICT}
+                  message: {type: string}
+                  request_id: {type: string}
+                  access_change: {$ref: "#/components/schemas/AccessChange"}
+                  acknowledgeable:
+                    type: boolean
+                    description: |
+                      Whether re-sending with `acknowledge_access_change: true` can
+                      succeed.
+    RateLimited:
+      description: Too many requests. Honour `Retry-After`.
+      headers:
+        Retry-After:
+          schema: {type: integer}
+        X-RateLimit-Limit:
+          schema: {type: integer}
+        X-RateLimit-Remaining:
+          schema: {type: integer}
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/Error"}

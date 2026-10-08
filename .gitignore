@@ -12,9 +12,7 @@
 # Regenerate with `bun run generate` (pulls the live spec, then generates) and commit the
 # result as its own commit, so machine-written diffs stay separate from hand-written ones.
 
-# The spec is a CACHE of what production serves, not a source of truth. Committing it would
-# create a second copy that can silently drift from the API. `bun run spec:pull` refetches.
-openapi/
+# Keep the released OpenAPI snapshot so publication never reads a newer live spec.
 
 # Fern working files
 **/.preview
@@ -26,3 +24,6 @@ sdks/typescript/node_modules/
 sdks/typescript/dist/
 sdks/typescript/package-lock.json
 sdks/typescript/bun.lock
+
+*.tgz
+__pycache__/

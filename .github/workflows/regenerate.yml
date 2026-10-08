@@ -1,104 +1,114 @@
-# Regenerate the SDK from the spec a production release serves, test it, and open a PR.
-#
-# agentleFS/proof-of-concept-2's sdk-regen.yml dispatches this after promotion has moved
-# production AND production serves the promoted build, so `spec:pull` reads that release's
-# contract. Dispatching on a merge to main instead read the PREVIOUS release's spec, since main
-# reaches production only through a release.
-#
-# It opens a PR rather than publishing: a spec change can rename or remove a method, and that
-# is a public API change a person should see before it ships. Merging the PR and pushing a
-# vX.Y.Z tag publishes through release.yml.
-#
-# A PR opened with GITHUB_TOKEN starts no workflow runs, so ci.yml never runs on it. This job
-# therefore runs the same checks itself before opening it, and the PR says so.
+# API promotion dispatches only after exhaustive CI and the final stable X.Y.Z release.
+# Generate and validate before committing/tagging; bot tag pushes need an explicit dispatch.
 name: Regenerate from a release
 
 on:
   workflow_dispatch:
     inputs:
       release:
-        description: "The agentleFS release production serves (X.Y.Z)"
+        description: "Final published API release (X.Y.Z); also the npm SDK version"
+        required: true
+      spec_gzip_base64:
+        description: "Gzip/base64 OpenAPI snapshot extracted from the final API release commit"
+        required: true
+      spec_sha256:
+        description: "SHA-256 of the uncompressed OpenAPI snapshot"
         required: true
       build:
-        description: "The commit that release deployed; health must report it"
+        description: "The commit bound to the final published API release"
         required: true
 
 permissions:
   contents: write
-  pull-requests: write
+  actions: write
 
 concurrency:
-  group: regenerate
+  group: regenerate-${{ inputs.release }}
   cancel-in-progress: false
+  queue: max
 
 env:
-  FERN_VERSION: "5.98.3" # same pin as ci.yml and release.yml
+  FERN_VERSION: "5.98.3"
 
 jobs:
   regenerate:
-    name: Regenerate, test, open a PR
+    name: Generate, test, tag and request publication
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
-
+        with:
+          ref: main
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.17.0"
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: "1.3.11"
-
-      # Inputs are free text: they reach scripts through env, never the script body.
-      - name: Check the inputs
+      - name: Validate release and check for a previously tested tag
+        id: existing
         env:
           RELEASE: ${{ inputs.release }}
           BUILD: ${{ inputs.build }}
+          SPEC_SHA256: ${{ inputs.spec_sha256 }}
         run: |
-          [[ "$RELEASE" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::release must be X.Y.Z, got '$RELEASE'"; exit 1; }
-          [[ "$BUILD" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::build must be a full commit sha, got '$BUILD'"; exit 1; }
-
+          set -euo pipefail
+          python3 scripts/release_contract.py validate "$RELEASE" "$BUILD" "$SPEC_SHA256"
+          if git show-ref --verify --quiet "refs/tags/v$RELEASE"; then
+            git show "v$RELEASE:sdk-release.json" > /tmp/sdk-release.json
+            python3 scripts/release_contract.py metadata "$RELEASE" "$BUILD" "$SPEC_SHA256" /tmp/sdk-release.json
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
       - name: Install the Fern CLI
+        if: steps.existing.outputs.exists != 'true'
         run: bun add -g fern-api@${{ env.FERN_VERSION }} --registry https://registry.npmjs.org
-
-      - name: Regenerate from the live spec
-        run: bun run generate
-
-      # Before the diff check, so a release that changed nothing the SDK exposes still proves
-      # the SDK works against it. EXPECT_BUILD fails the run if production moved to another
-      # build between the dispatch and the spec pull.
-      - name: Tests, against the regenerated SDK and production
+      - name: Generate from the immutable final API spec
+        if: steps.existing.outputs.exists != 'true'
         env:
-          EXPECT_BUILD: ${{ inputs.build }}
+          SDK_VERSION: ${{ inputs.release }}
+          SPEC_GZIP_BASE64: ${{ inputs.spec_gzip_base64 }}
+          SPEC_SHA256: ${{ inputs.spec_sha256 }}
+        run: |
+          python3 scripts/release_contract.py unpack
+          fern generate --local
+          bun run scripts/write-package-json.ts
+      - name: SDK contract tests and live health
+        if: steps.existing.outputs.exists != 'true'
+        env:
           AGENTLEFS_TOKEN: ${{ secrets.AGENTLEFS_TOKEN }}
         run: bun run test
-
-      - name: Generated SDK compiles
-        run: cd sdks/typescript && bun build --target=node index.ts --outfile /dev/null
-
-      - name: Open a PR if the SDK changed
+      - name: Build and load the packed CJS and ESM package
+        if: steps.existing.outputs.exists != 'true'
+        run: bash scripts/check-package.sh
+      - name: Commit the tested snapshot and tag its SDK version
+        if: steps.existing.outputs.exists != 'true'
+        env:
+          RELEASE: ${{ inputs.release }}
+          BUILD: ${{ inputs.build }}
+          SPEC_SHA256: ${{ inputs.spec_sha256 }}
+        run: |
+          set -euo pipefail
+          python3 scripts/release_contract.py write "$RELEASE" "$BUILD" "$SPEC_SHA256" sdk-release.json
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add sdks/ openapi/v1.yaml sdk-release.json
+          if ! git diff --cached --quiet; then
+            git commit -m "Release SDK $RELEASE from API build $BUILD"
+          fi
+          # The generated commit lives in its immutable release tag. Independent versions
+          # never compete to overwrite main, and branch protection needs no exception.
+          git tag "v$RELEASE"
+          git push origin "refs/tags/v$RELEASE"
+      - name: Publish through the npm trusted workflow
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE: ${{ inputs.release }}
           BUILD: ${{ inputs.build }}
         run: |
-          set -euo pipefail
-          if [ -z "$(git status --porcelain sdks/)" ]; then
-            echo "Release $RELEASE changes nothing in the SDK."
-            exit 0
-          fi
-          branch="regenerate/$RELEASE"
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git checkout -B "$branch"
-          git add sdks/
-          git commit -m "Regenerate from agentleFS $RELEASE" -m "Spec served by production at build $BUILD."
-          git push --force -u origin "$branch"
-          if [ -n "$(gh pr list --head "$branch" --state open --json number --jq '.[].number')" ]; then
-            echo "The PR for $branch is open and now carries this regeneration."
-            exit 0
-          fi
-          gh pr create --base main --head "$branch" \
-            --title "Regenerate from agentleFS $RELEASE" \
-            --body "$(printf '%s\n\n%s\n\n%s\n\n%s\n' \
-              "Generated from https://agentlefs.com/v1/openapi.yaml while production served release $RELEASE (build \`$BUILD\`)." \
-              "The dispatching run already passed the tests, the live health check against that build, and the bundle check. ci.yml does not run on a PR opened by GITHUB_TOKEN; push any commit to this branch to start it." \
-              "**Diff summary**" \
-              "$(git --no-pager diff --stat HEAD~1 -- sdks/ | tail -20)")"
+          # GITHUB_TOKEN-created tags do not trigger push workflows. Explicit dispatch does.
+          gh workflow run release.yml --ref "v$RELEASE" -f dry_run=false -f release="$RELEASE" -f build="$BUILD"
+          echo "Requested Release for @agentlefs/sdk@$RELEASE; verify that workflow to confirm npm publication." >> "$GITHUB_STEP_SUMMARY"

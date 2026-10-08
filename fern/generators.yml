@@ -1,20 +1,9 @@
 # yaml-language-server: $schema=https://schema.buildwithfern.dev/generators-yml.json
 api:
   specs:
-    # A LOCAL path, fetched from the live API before generation. Not a URL.
-    #
-    # `generators.yml` does not accept an https URL here, despite the quickstart implying
-    # otherwise: `fern init --openapi <url>` DOWNLOADS the spec to a temp file and writes a
-    # local path, and pointing this key at a URL fails with "Missing file". Verified both
-    # ways rather than assumed.
-    #
-    # So the spec is fetched into openapi/ before generating, by `bun run spec:pull` (see
-    # package.json) or by CI. That keeps the property that actually mattered: generation
-    # reads what PRODUCTION serves, not a sibling checkout of a private repo, so CI needs no
-    # cross-repo token and the path does not depend on where anyone cloned things.
-    #
-    # openapi/v1.yaml is gitignored: it is a cache of the live contract, and committing it
-    # would create a second copy of the truth that can silently drift.
+    # The committed OpenAPI snapshot makes SDK generation reproducible.
+    # Final API release automation supplies the exact tagged spec and verifies its digest.
+    # Local `bun run generate` refreshes this snapshot from production deliberately.
     - openapi: ../openapi/v1.yaml
 default-group: local
 groups:
@@ -37,10 +26,8 @@ groups:
         # package.json or one named "test-package" with an empty version, and `npm pack`
         # refuses it.
         #
-        # That is fine while nothing is published. Before publishing, resolve it one of:
-        #   1. try a newer generator version (3.88.0 is what `fern init` pinned)
-        #   2. report it to Fern with this repro
-        #   3. write package.json as a post-generation step in CI
+        # scripts/write-package-json.ts supplies the published metadata after generation.
+        # Remove that workaround only once the generator reliably emits the same files.
         #
         # Do not "fix" this by re-adding a config block without re-running
         # `fern generate --local` and COUNTING THE FILES. A success message is not
