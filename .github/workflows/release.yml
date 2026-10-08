@@ -56,11 +56,8 @@ jobs:
           if [ "$GITHUB_REF_TYPE" = "tag" ]; then
             version="${GITHUB_REF_NAME#v}"
             [ "$GITHUB_REF_NAME" = "v$version" ]
+            bash scripts/check-release-snapshot.sh
             python3 scripts/release_contract.py validate "$version"
-            # Automatic generated snapshots have a trusted main commit as their parent.
-            git merge-base --is-ancestor HEAD^ origin/main
-            unexpected="$(git diff-tree --no-commit-id --name-only -r HEAD | grep -Ev '^(sdks/|openapi/v1\.yaml$|sdk-release\.json$)' || true)"
-            [ -z "$unexpected" ] || { echo "::error::Release snapshot changes workflow/source files: $unexpected"; exit 1; }
             recorded_build="$(python3 -c 'import json; print(json.load(open("sdk-release.json"))["build"])')"
             recorded_spec="$(python3 -c 'import json; print(json.load(open("sdk-release.json"))["spec_sha256"])')"
             python3 scripts/release_contract.py metadata "$version" "$recorded_build" "$recorded_spec" sdk-release.json
