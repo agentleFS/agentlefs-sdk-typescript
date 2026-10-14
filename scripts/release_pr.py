@@ -106,7 +106,7 @@ def publish_pr(version, build, digest):
                  f"body=Update the generated SDK to API release {version} (build {build}). Generation, SDK tests, and packed CJS/ESM checks passed. CI is explicitly dispatched before automatic squash merge and publication.")
     number = pr["number"]
     if not pr.get("merged"):
-        # GITHUB_TOKEN-created PRs do not emit a workflow-triggering pull_request event.
+        # Explicit dispatch avoids manual workflow approval for bot-created PRs.
         baseline = api(f"repos/{repo}/actions/workflows/ci.yml/runs?event=workflow_dispatch&head_sha={sha}&per_page=100")
         seen = {item["id"] for item in baseline["workflow_runs"]}
         run("gh", "workflow", "run", "ci.yml", "--ref", branch)

@@ -26,8 +26,8 @@ metadata to a `generated/sdk-X.Y.Z` branch and automatically open a PR into `mai
 The workflow explicitly dispatches CI for that exact commit, waits for all three
 SDK jobs to pass, and performs a head-matched squash merge automatically. It verifies
 that the merged commit contains exactly the tested generated files, tags that
-commit `X.Y.Z`, and explicitly dispatches `release.yml`. Bot-created PRs and tags
-do not start event-triggered workflows by themselves. No routine manual PR or
+commit `X.Y.Z`, and explicitly dispatches `release.yml`. Explicit dispatch avoids
+manual workflow approvals for bot-created PRs and starts publication for bot-created tags. No routine manual PR or
 merge step is required; failures or conflicting branch rules need intervention.
 
 The API repository needs `SDK_DISPATCH_TOKEN` with Actions write access to this
