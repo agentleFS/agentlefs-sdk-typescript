@@ -21,9 +21,10 @@ on:
 permissions:
   contents: write
   actions: write
+  pull-requests: write
 
 concurrency:
-  group: regenerate-${{ inputs.release }}
+  group: regenerate-sdk-main
   cancel-in-progress: false
   queue: max
 
@@ -32,10 +33,10 @@ env:
 
 jobs:
   regenerate:
-    name: Generate, test, tag and request publication
+    name: Generate, test, merge automatically and request publication
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 65
     steps:
       - uses: actions/checkout@v4
         with:
@@ -53,6 +54,7 @@ jobs:
           RELEASE: ${{ inputs.release }}
           BUILD: ${{ inputs.build }}
           SPEC_SHA256: ${{ inputs.spec_sha256 }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           python3 scripts/release_contract.py validate "$RELEASE" "$BUILD" "$SPEC_SHA256"
@@ -61,6 +63,7 @@ jobs:
             python3 scripts/release_contract.py metadata "$RELEASE" "$BUILD" "$SPEC_SHA256" /tmp/sdk-release.json
             echo "exists=true" >> "$GITHUB_OUTPUT"
           else
+            python3 scripts/release_pr.py preflight "$RELEASE" "$BUILD" "$SPEC_SHA256"
             echo "exists=false" >> "$GITHUB_OUTPUT"
           fi
       - name: Install the Fern CLI
@@ -84,12 +87,13 @@ jobs:
       - name: Build and load the packed CJS and ESM package
         if: steps.existing.outputs.exists != 'true'
         run: bash scripts/check-package.sh
-      - name: Commit the tested snapshot and tag its SDK version
+      - name: Commit the tested snapshot and land its generated release PR
         if: steps.existing.outputs.exists != 'true'
         env:
           RELEASE: ${{ inputs.release }}
           BUILD: ${{ inputs.build }}
           SPEC_SHA256: ${{ inputs.spec_sha256 }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           python3 scripts/release_contract.py write "$RELEASE" "$BUILD" "$SPEC_SHA256" sdk-release.json
@@ -99,10 +103,7 @@ jobs:
           if ! git diff --cached --quiet; then
             git commit -m "Release SDK $RELEASE from API build $BUILD"
           fi
-          # The generated commit lives in its immutable release tag. Independent versions
-          # never compete to overwrite main, and branch protection needs no exception.
-          git tag "$RELEASE"
-          git push origin "refs/tags/$RELEASE"
+          python3 scripts/release_pr.py publish-pr "$RELEASE" "$BUILD" "$SPEC_SHA256"
       - name: Publish through the npm trusted workflow
         env:
           GH_TOKEN: ${{ github.token }}
