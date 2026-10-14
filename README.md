@@ -22,15 +22,27 @@ releases whose API contract is unchanged.
 Regeneration verifies the snapshot digest, generates from those exact bytes and runs SDK
 tests, builds, and loads the packed package through CJS and ESM. Only after those
 checks pass does it commit the generated SDK, OpenAPI snapshot and release
-metadata as a snapshot commit, create `X.Y.Z`, and explicitly dispatch
-`release.yml` on that tag. A bot-created tag does not start a push workflow by itself.
+metadata to a `generated/sdk-X.Y.Z` branch and automatically open a PR into `main`.
+The workflow explicitly dispatches CI for that exact commit, waits for all three
+SDK jobs to pass, and performs a head-matched squash merge automatically. It verifies
+that the merged commit contains exactly the tested generated files, tags that
+commit `X.Y.Z`, and explicitly dispatches `release.yml`. Bot-created PRs and tags
+do not start event-triggered workflows by themselves. No routine manual PR or
+merge step is required; failures or conflicting branch rules need intervention.
 
 The API repository needs `SDK_DISPATCH_TOKEN` with Actions write access to this
-repository. Each tested snapshot is committed only under its `X.Y.Z` tag;
-`main` continues to hold the reviewed generator and workflow code. Per-version
-queues let separate releases finish without overwriting main or cancelling one
-another. The workflow needs contents and Actions write permissions; PR creation
-permission is no longer needed. It never force pushes.
+repository. Enable **Allow GitHub Actions to create and approve pull requests**
+in this repository's Actions settings; organization policy must also allow it. The regeneration workflow needs contents,
+Actions and pull-request write permissions. It never force pushes. A shared queue
+serializes updates to `main`, and release metadata plus existing stable tags prevent
+older releases from replacing a newer SDK. Matching historical release tags can
+still resume publication without modifying `main`.
+
+The automation waits for the explicitly dispatched CI run before requesting merge.
+Existing branch protection still applies. If additional required checks or reviews
+block the bot, the merge fails and the PR remains available to retry; configure those rules
+for the release bot before relying on unattended releases. A workflow-dispatch CI
+run does not substitute for every kind of pull-request-required check.
 
 Before publishing, configure the trusted publisher for `@agentlefs/sdk` in npm:
 
@@ -52,7 +64,8 @@ from a moving live spec. A real publish requires a stable SDK tag with a trusted
 Branch dispatches can only dry run.
 
 To retry a failed publication, rerun regeneration with the same API release and
-build. An existing matching tag resumes publication; mismatched build metadata
+build. An existing generated PR is reused, including a PR already merged before
+a tagging failure. An existing matching tag resumes publication; mismatched build metadata
 fails. An existing npm version is accepted only if its package integrity matches
 the newly tested tarball. npm writes use a shared queue that retains up to 100
 pending releases. If an older release finishes late, it publishes under `api-X.Y.Z` without moving npm's `latest`
