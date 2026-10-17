@@ -712,6 +712,104 @@ paths:
         "404": {$ref: "#/components/responses/NotFound"}
         "429": {$ref: "#/components/responses/RateLimited"}
 
+  /v1/uploads:
+    post:
+      operationId: createUpload
+      tags: [Documents]
+      summary: Upload files by naming them, rsync-style
+      description: |
+        The one upload every agentleFS surface uses (the console's Upload and the MCP tool
+        `doc_create action=upload` send this same manifest). Name each file by its
+        SHA-256 and size, relative to `destination`, and each path is answered:
+
+        - `unchanged`: the destination already holds these bytes; nothing to send.
+        - `upload`: PUT the file's bytes to `url` (no Authorization header; the URL's
+          token is the permission, for this one file, for fifteen minutes). A `.docx`,
+          `.pptx` or `.html` is stored as the markdown it converts to, at `location`.
+        - `stored`: the bytes came with the request (`data`, an RFC 2397 data: URI under
+          256 KB, or `source_url`, an https URL the server fetched) and were committed.
+        - `refused`: why, for that path alone.
+
+        Everything that arrives lands as ONE commit when the last file arrives, or when
+        `sync.expires_at` passes; a file that never arrived is sent again by the next
+        run of the same manifest, which finds it still differs. An upload replaces the
+        file at its location (last writer wins); the version it replaced stays in history.
+
+        `remote_only` lists files under `destination` you can read that the manifest
+        leaves out. `delete: true` removes them through the ordinary, undoable delete.
+
+        Limits: 1,000 files and 1 GB a manifest, 100 MB a file.
+
+        A retry with the same `Idempotency-Key` is answered from what is stored, so
+        what the first call landed comes back `unchanged`.
+      parameters:
+      - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [destination, entries]
+              properties:
+                destination:
+                  type: string
+                  description: The folder the paths are relative to, from the workspace root.
+                  examples: ["handbook/figures"]
+                entries:
+                  type: array
+                  items:
+                    type: object
+                    required: [path]
+                    properties:
+                      path: {type: string, examples: ["img/photo.png"]}
+                      sha256: {type: string, description: "64 hex characters; required unless data or source_url brings the bytes"}
+                      size: {type: integer, description: "Bytes; required with sha256"}
+                      mimeType: {type: string}
+                      source_url: {type: string, description: "An https URL the server fetches the bytes from"}
+                      data: {type: string, description: "The bytes as an RFC 2397 data: URI, under 256 KB"}
+                delete:
+                  type: boolean
+                  description: Remove what `destination` holds that `entries` leaves out (undoable).
+      responses:
+        "200":
+          description: Each path answered.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  destination: {type: string}
+                  files:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        path: {type: string}
+                        answer: {type: string, enum: [unchanged, upload, received, stored, refused]}
+                        location: {type: string}
+                        link: {type: string, description: "The markdown a document beside it links it with"}
+                        url: {type: string}
+                        method: {type: string}
+                        max_size: {type: integer}
+                        sha256: {type: string}
+                        expires_at: {type: string}
+                        reason: {type: string}
+                  remote_only: {type: array, items: {type: string}}
+                  remote_only_more: {type: integer}
+                  deleted: {type: array, items: {type: string}}
+                  delete_refused: {type: string}
+                  sync:
+                    type: [object, "null"]
+                    properties:
+                      id: {type: string}
+                      expires_at: {type: string}
+                  commit: {type: [string, "null"]}
+        "400": {$ref: "#/components/responses/InvalidRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "429": {$ref: "#/components/responses/RateLimited"}
+
   /v1/moves:
     post:
       operationId: moveDocument
@@ -805,11 +903,13 @@ paths:
       - name: mode
         in: query
         description: |
-          `auto` (default) picks a strategy from the query shape. `all` runs
-          several and merges. `titles`, `labels`, `text`, and `meaning` force one.
+          `all` (default) runs every strategy and merges one list. `auto` runs
+          one: `meaning` where this deployment has a vector index, `text` where it
+          does not. `titles`, `labels`, `text`, and `meaning` force one.
         schema:
           type: string
           enum: [all, auto, titles, labels, text, meaning]
+          default: all
       - name: location
         in: query
         description: |
