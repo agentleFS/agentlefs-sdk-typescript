@@ -755,6 +755,127 @@ export class DocumentsClient {
     }
 
     /**
+     * The one upload every agentleFS surface uses (the console's Upload and the MCP tool
+     * `doc_create action=upload` send this same manifest). Name each file by its
+     * SHA-256 and size, relative to `destination`, and each path is answered:
+     *
+     * - `unchanged`: the destination already holds these bytes; nothing to send.
+     * - `upload`: PUT the file's bytes to `url` (no Authorization header; the URL's
+     *   token is the permission, for this one file, for fifteen minutes). A `.docx`,
+     *   `.pptx` or `.html` is stored as the markdown it converts to, at `location`.
+     * - `stored`: the bytes came with the request (`data`, an RFC 2397 data: URI under
+     *   256 KB, or `source_url`, an https URL the server fetched) and were committed.
+     * - `refused`: why, for that path alone.
+     *
+     * Everything that arrives lands as ONE commit when the last file arrives, or when
+     * `sync.expires_at` passes; a file that never arrived is sent again by the next
+     * run of the same manifest, which finds it still differs. An upload replaces the
+     * file at its location (last writer wins); the version it replaced stays in history.
+     *
+     * `remote_only` lists files under `destination` you can read that the manifest
+     * leaves out. `delete: true` removes them through the ordinary, undoable delete.
+     *
+     * Limits: 1,000 files and 1 GB a manifest, 100 MB a file.
+     *
+     * A retry with the same `Idempotency-Key` is answered from what is stored, so
+     * what the first call landed comes back `unchanged`.
+     *
+     * @param {AgentlefsApi.CreateUploadRequest} request
+     * @param {DocumentsClient.RequestOptions} requestOptions - Request-specific configuration.
+     *
+     * @throws {@link AgentlefsApi.BadRequestError}
+     * @throws {@link AgentlefsApi.UnauthorizedError}
+     * @throws {@link AgentlefsApi.NotFoundError}
+     * @throws {@link AgentlefsApi.TooManyRequestsError}
+     * @throws {@link errors.AgentlefsApiError}
+     * @throws {@link errors.AgentlefsApiTimeoutError}
+     *
+     * @example
+     *     await client.documents.createUpload({
+     *         "Idempotency-Key": "Idempotency-Key",
+     *         destination: "handbook/figures",
+     *         entries: [{
+     *                 path: "img/photo.png"
+     *             }]
+     *     })
+     */
+    public createUpload(
+        request: AgentlefsApi.CreateUploadRequest,
+        requestOptions?: DocumentsClient.RequestOptions,
+    ): core.HttpResponsePromise<AgentlefsApi.CreateUploadResponse> {
+        return core.HttpResponsePromise.fromPromise(this.__createUpload(request, requestOptions));
+    }
+
+    private async __createUpload(
+        request: AgentlefsApi.CreateUploadRequest,
+        requestOptions?: DocumentsClient.RequestOptions,
+    ): Promise<core.WithRawResponse<AgentlefsApi.CreateUploadResponse>> {
+        const { "Idempotency-Key": idempotencyKey, ..._body } = request;
+        const _authRequest: core.AuthRequest = await this._options.authProvider.getAuthRequest();
+        const _headers: core.Fetcher.Args["headers"] = mergeHeaders(
+            _authRequest.headers,
+            this._options?.headers,
+            mergeOnlyDefinedHeaders({ "Idempotency-Key": idempotencyKey }),
+            requestOptions?.headers,
+        );
+        const _response = await core.fetcher({
+            url: core.url.join(
+                (await core.Supplier.get(this._options.baseUrl)) ??
+                    (await core.Supplier.get(this._options.environment)) ??
+                    environments.AgentlefsApiEnvironment.Production,
+                "v1/uploads",
+            ),
+            method: "POST",
+            headers: _headers,
+            contentType: "application/json",
+            queryString: core.url.queryBuilder().mergeAdditional(requestOptions?.queryParams).build(),
+            requestType: "json",
+            body: mergeAdditionalBodyParameters(_body, requestOptions?.additionalBodyParameters),
+            timeoutMs: (requestOptions?.timeoutInSeconds ?? this._options?.timeoutInSeconds ?? 60) * 1000,
+            maxRetries: requestOptions?.maxRetries ?? this._options?.maxRetries,
+            abortSignal: requestOptions?.abortSignal,
+            fetchFn: this._options?.fetch,
+            logging: this._options.logging,
+        });
+        if (_response.ok) {
+            return { data: _response.body as AgentlefsApi.CreateUploadResponse, rawResponse: _response.rawResponse };
+        }
+
+        if (_response.error.reason === "status-code") {
+            switch (_response.error.statusCode) {
+                case 400:
+                    throw new AgentlefsApi.BadRequestError(
+                        _response.error.body as AgentlefsApi.Error_,
+                        _response.rawResponse,
+                    );
+                case 401:
+                    throw new AgentlefsApi.UnauthorizedError(
+                        _response.error.body as AgentlefsApi.Error_,
+                        _response.rawResponse,
+                    );
+                case 404:
+                    throw new AgentlefsApi.NotFoundError(
+                        _response.error.body as AgentlefsApi.Error_,
+                        _response.rawResponse,
+                    );
+                case 429:
+                    throw new AgentlefsApi.TooManyRequestsError(
+                        _response.error.body as AgentlefsApi.Error_,
+                        _response.rawResponse,
+                    );
+                default:
+                    throw new errors.AgentlefsApiError({
+                        statusCode: _response.error.statusCode,
+                        body: _response.error.body,
+                        rawResponse: _response.rawResponse,
+                    });
+            }
+        }
+
+        return handleNonStatusCodeError(_response.error, _response.rawResponse, "POST", "/v1/uploads");
+    }
+
+    /**
      * Relocates content between folders. Authorized on both sides: the source
      * subtree must be yours to change (all of it, including parts you cannot see),
      * and you must be able to write at the destination. Without the destination
