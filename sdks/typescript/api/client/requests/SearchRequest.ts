@@ -11,8 +11,9 @@ import type * as AgentlefsApi from "../../index.js";
 export interface SearchRequest {
     q: string;
     /**
-     * `auto` (default) picks a strategy from the query shape. `all` runs
-     * several and merges. `titles`, `labels`, `text`, and `meaning` force one.
+     * `all` (default) runs every strategy and merges one list. `auto` runs
+     * one: `meaning` where this deployment has a vector index, `text` where it
+     * does not. `titles`, `labels`, `text`, and `meaning` force one.
      */
     mode?: AgentlefsApi.SearchRequestMode;
     /**
