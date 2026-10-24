@@ -1,4 +1,5 @@
 export type { CreateDocumentRequest } from "./CreateDocumentRequest.js";
+export type { CreateUploadRequest } from "./CreateUploadRequest.js";
 export type { DeleteDocumentRequest } from "./DeleteDocumentRequest.js";
 export type { ListDocumentsRequest } from "./ListDocumentsRequest.js";
 export type { MoveDocumentRequest } from "./MoveDocumentRequest.js";
