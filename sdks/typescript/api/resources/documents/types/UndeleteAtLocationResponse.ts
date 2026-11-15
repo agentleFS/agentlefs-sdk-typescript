@@ -13,4 +13,9 @@ export interface UndeleteAtLocationResponse {
      * an undo that found nothing to restore.
      */
     directories?: number | undefined;
+    /**
+     * Present and true when this was an idempotent replay, which carries
+     * `location` and `restored` from the first attempt and no other count.
+     */
+    replayed?: boolean | undefined;
 }

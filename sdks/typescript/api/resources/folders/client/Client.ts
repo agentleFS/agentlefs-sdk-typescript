@@ -232,11 +232,14 @@ export class FoldersClient {
      * An omission is never a permissions signal. Content behind an ACL is absent from
      * the archive AND from the manifest, exactly as it is absent from a listing.
      *
+     * A folder that does not exist, or that holds nothing you can read, is an empty
+     * archive (`200`, `x-archive-entries: 0`), never a `404`: like a listing, the export
+     * cannot tell you whether a folder you cannot read exists.
+     *
      * `location` is given in the query string, like `parent` on `GET /v1/folders`.
      *
      * @throws {@link AgentlefsApi.BadRequestError}
      * @throws {@link AgentlefsApi.UnauthorizedError}
-     * @throws {@link AgentlefsApi.NotFoundError}
      * @throws {@link AgentlefsApi.TooManyRequestsError}
      * @throws {@link errors.AgentlefsApiError}
      * @throws {@link errors.AgentlefsApiTimeoutError}
@@ -296,11 +299,6 @@ export class FoldersClient {
                     );
                 case 401:
                     throw new AgentlefsApi.UnauthorizedError(
-                        _response.error.body as AgentlefsApi.Error_,
-                        _response.rawResponse,
-                    );
-                case 404:
-                    throw new AgentlefsApi.NotFoundError(
                         _response.error.body as AgentlefsApi.Error_,
                         _response.rawResponse,
                     );

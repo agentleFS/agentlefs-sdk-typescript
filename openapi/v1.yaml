@@ -244,6 +244,11 @@ paths:
                 $ref: '#/components/schemas/DocumentContent'
             application/octet-stream:
               schema: {type: string, format: binary}
+            # A download answers with the document's own media type (`text/markdown` for a
+            # markdown document, `image/png` for a PNG asset), and `application/octet-stream`
+            # only when none is recorded.
+            "*/*":
+              schema: {type: string, format: binary}
         "400": {$ref: "#/components/responses/InvalidRequest"}
         "401": {$ref: "#/components/responses/Unauthenticated"}
         "404": {$ref: "#/components/responses/NotFound"}
@@ -415,6 +420,10 @@ paths:
         An omission is never a permissions signal. Content behind an ACL is absent from
         the archive AND from the manifest, exactly as it is absent from a listing.
 
+        A folder that does not exist, or that holds nothing you can read, is an empty
+        archive (`200`, `x-archive-entries: 0`), never a `404`: like a listing, the export
+        cannot tell you whether a folder you cannot read exists.
+
         `location` is given in the query string, like `parent` on `GET /v1/folders`.
       parameters:
       - name: location
@@ -440,7 +449,6 @@ paths:
               schema: {type: string, format: binary}
         "400": {$ref: "#/components/responses/InvalidRequest"}
         "401": {$ref: "#/components/responses/Unauthenticated"}
-        "404": {$ref: "#/components/responses/NotFound"}
         "429": {$ref: "#/components/responses/RateLimited"}
 
   /v1/grants:
@@ -707,6 +715,11 @@ paths:
                       ones included. Undoing the delete of an empty directory restores no
                       documents and one directory, so this is what tells that apart from
                       an undo that found nothing to restore.
+                  replayed:
+                    type: boolean
+                    description: |
+                      Present and true when this was an idempotent replay, which carries
+                      `location` and `restored` from the first attempt and no other count.
         "400": {$ref: "#/components/responses/InvalidRequest"}
         "401": {$ref: "#/components/responses/Unauthenticated"}
         "404": {$ref: "#/components/responses/NotFound"}
@@ -726,6 +739,8 @@ paths:
         - `upload`: PUT the file's bytes to `url` (no Authorization header; the URL's
           token is the permission, for this one file, for fifteen minutes). A `.docx`,
           `.pptx` or `.html` is stored as the markdown it converts to, at `location`.
+        - `received`: the bytes came with the request and are held until the rest of the
+          manifest arrives, when they land in the same commit as everything else.
         - `stored`: the bytes came with the request (`data`, an RFC 2397 data: URI under
           256 KB, or `source_url`, an https URL the server fetched) and were committed.
         - `refused`: why, for that path alone.
@@ -1279,6 +1294,9 @@ components:
             The folder id, which is also the scope a grant names — the same string as
             `location`. Kept because it is what `GET /v1/folders` calls it.
         commit: {type: string}
+        replayed:
+          type: boolean
+          description: Present and true when this was an idempotent replay.
     GrantList:
       type: object
       properties:
