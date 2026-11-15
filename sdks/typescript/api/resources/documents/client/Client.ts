@@ -763,6 +763,8 @@ export class DocumentsClient {
      * - `upload`: PUT the file's bytes to `url` (no Authorization header; the URL's
      *   token is the permission, for this one file, for fifteen minutes). A `.docx`,
      *   `.pptx` or `.html` is stored as the markdown it converts to, at `location`.
+     * - `received`: the bytes came with the request and are held until the rest of the
+     *   manifest arrives, when they land in the same commit as everything else.
      * - `stored`: the bytes came with the request (`data`, an RFC 2397 data: URI under
      *   256 KB, or `source_url`, an https URL the server fetched) and were committed.
      * - `refused`: why, for that path alone.

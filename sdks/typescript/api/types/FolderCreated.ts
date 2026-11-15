@@ -9,4 +9,6 @@ export interface FolderCreated {
      */
     id?: string | undefined;
     commit?: string | undefined;
+    /** Present and true when this was an idempotent replay. */
+    replayed?: boolean | undefined;
 }
