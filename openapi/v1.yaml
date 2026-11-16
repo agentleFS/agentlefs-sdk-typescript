@@ -83,6 +83,7 @@ tags:
   - name: Documents
   - name: Folders
   - name: Access
+  - name: Audit
   - name: Search
   - name: Service
 
@@ -395,6 +396,43 @@ paths:
         "400": {$ref: "#/components/responses/InvalidRequest"}
         "401": {$ref: "#/components/responses/Unauthenticated"}
         "409": {$ref: "#/components/responses/Conflict"}
+        "429": {$ref: "#/components/responses/RateLimited"}
+
+  /v1/reads/export:
+    get:
+      operationId: exportReads
+      tags: [Audit]
+      summary: Export who read which documents
+      description: |
+        An approver's export of read and search-hit audit rows, limited to documents
+        the caller can read now. Includes reads that arrived through the console, MCP
+        and this API. Search words are never returned — only a query hash. A key that
+        is not an approver of any node receives `404` (this surface has no forbidden
+        code). Same core as `GET /api/reads/export` and MCP `export_reads` (#2248).
+      parameters:
+      - name: from
+        in: query
+        description: ISO start of the range (inclusive). Omit for the beginning of the log.
+        schema: {type: string, format: date-time}
+      - name: to
+        in: query
+        description: ISO end of the range (exclusive). Omit for now.
+        schema: {type: string, format: date-time}
+      - name: format
+        in: query
+        description: jsonl (default) or csv.
+        schema: {type: string, enum: [jsonl, csv], default: jsonl}
+      responses:
+        "200":
+          description: The readable read rows, as JSON lines or CSV. No count of withheld rows.
+          content:
+            application/x-ndjson:
+              schema: {type: string}
+            text/csv:
+              schema: {type: string}
+        "400": {$ref: "#/components/responses/InvalidRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "404": {$ref: "#/components/responses/NotFound"}
         "429": {$ref: "#/components/responses/RateLimited"}
 
   /v1/folders/export:

@@ -1,6 +1,9 @@
 export * from "./access/client/requests/index.js";
 export * as access from "./access/index.js";
 export * from "./access/types/index.js";
+export * from "./audit/client/requests/index.js";
+export * as audit from "./audit/index.js";
+export * from "./audit/types/index.js";
 export * from "./documents/client/requests/index.js";
 export * as documents from "./documents/index.js";
 export * from "./documents/types/index.js";
