@@ -2,6 +2,7 @@
 
 import * as AgentlefsApi from "./api/index.js";
 import { AccessClient } from "./api/resources/access/client/Client.js";
+import { AuditClient } from "./api/resources/audit/client/Client.js";
 import { DocumentsClient } from "./api/resources/documents/client/Client.js";
 import { FoldersClient } from "./api/resources/folders/client/Client.js";
 import { ServiceClient } from "./api/resources/service/client/Client.js";
@@ -24,6 +25,7 @@ export class AgentlefsApiClient {
     protected _service: ServiceClient | undefined;
     protected _documents: DocumentsClient | undefined;
     protected _folders: FoldersClient | undefined;
+    protected _audit: AuditClient | undefined;
     protected _access: AccessClient | undefined;
 
     constructor(options: AgentlefsApiClient.Options = {}) {
@@ -40,6 +42,10 @@ export class AgentlefsApiClient {
 
     public get folders(): FoldersClient {
         return (this._folders ??= new FoldersClient(this._options));
+    }
+
+    public get audit(): AuditClient {
+        return (this._audit ??= new AuditClient(this._options));
     }
 
     public get access(): AccessClient {
