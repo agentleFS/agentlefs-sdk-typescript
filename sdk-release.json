@@ -1,5 +1,5 @@
 {
-  "release": "0.12.33",
-  "build": "09a73b6853274a0ec2c562a6f22d65d32c4b41b4",
-  "spec_sha256": "3de2655c0c6f6fb6687144893275d021809cd25d05d98a682c44c88208f551e2"
+  "release": "0.12.36",
+  "build": "72ad054def7ae1f5d982ca2550cae63fb9933764",
+  "spec_sha256": "a9a1def5ce4a6a44af5bfe1bb3dfb7178376ad79920f580440ed6558bfef7072"
 }
