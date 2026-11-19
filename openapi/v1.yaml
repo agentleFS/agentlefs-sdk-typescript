@@ -9,18 +9,27 @@ info:
 
     ## Authentication
 
-    Every request carries an API key as a bearer token:
+    Every request carries one of two credentials as a bearer token:
 
+        Authorization: Bearer afa_...
         Authorization: Bearer afs_...
 
-    Keys are minted in the console (Access, open a principal, Tokens, Mint, with
-    "enable for the REST API" ticked). They are the ONLY accepted credential: a
-    browser session token is rejected, and so is an agent token that was not
-    enabled for this API.
+    **An agent access token (`afa_`)** is what the token endpoint (`POST /token`)
+    issues to an agent: from a signed-in machine, an exchange, or a federated
+    run. It lives 15 minutes and is renewed at the token endpoint, never here. It
+    reaches exactly what the same agent reaches over MCP, and it stops working at
+    its next request once the agent, anything above it, or whatever drove it to
+    the token is ended. A refresh (`afr_`) or renewal (`afx_`) token is not a
+    credential for this API.
 
-    A key is long-lived and does not expire unless you choose an expiry when
-    minting it. Revocation is therefore the control for making a key stop
-    working, and it takes effect on the next request, with no cache to wait out.
+    **An API key (`afs_`)** is minted in the console (Access, open a principal,
+    Tokens, Mint, with "enable for the REST API" ticked). Keys are being retired
+    in favour of agent access tokens. A key is long-lived and does not expire
+    unless you choose an expiry when minting it; revocation takes effect on the
+    next request, with no cache to wait out.
+
+    Nothing else is accepted: a browser session token is rejected, and so is an
+    API key that was not enabled for this API.
 
     ## Determinism
 
@@ -987,9 +996,12 @@ components:
       type: http
       scheme: bearer
       description: |
-        A agentleFS API key, prefixed `afs_`. Mint and revoke keys in the console.
-        Browser session tokens are not accepted on this API. Keys minted before the
-        agentleFS rename carry the older `cht_` prefix and are still accepted.
+        An agent access token, prefixed `afa_`, issued by the token endpoint
+        (`POST /token`) and valid for 15 minutes; or an agentleFS API key, prefixed
+        `afs_`, minted and revoked in the console (keys minted before the agentleFS
+        rename carry the older `cht_` prefix and are still accepted). Browser session
+        tokens, and the token endpoint's refresh and renewal tokens, are not accepted
+        on this API.
 
   parameters:
     LocationQuery:
@@ -1390,8 +1402,9 @@ components:
           schema: {$ref: "#/components/schemas/Error"}
     Unauthenticated:
       description: |
-        Missing, malformed, revoked, or expired API key. Also returned when a
-        credential that is not an API key is presented.
+        Missing, malformed, revoked, or expired credential (an agent access token
+        whose agent or driver has ended, or an API key). Also returned when any
+        other kind of credential is presented.
       content:
         application/json:
           schema: {$ref: "#/components/schemas/Error"}
