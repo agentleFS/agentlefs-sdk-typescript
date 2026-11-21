@@ -997,11 +997,12 @@ components:
       scheme: bearer
       description: |
         An agent access token, prefixed `afa_`, issued by the token endpoint
-        (`POST /token`) and valid for 15 minutes; or an agentleFS API key, prefixed
-        `afs_`, minted and revoked in the console (keys minted before the agentleFS
-        rename carry the older `cht_` prefix and are still accepted). Browser session
-        tokens, and the token endpoint's refresh and renewal tokens, are not accepted
-        on this API.
+        (`POST /token`) and valid for 15 minutes: `afs-run --agent @handle` keeps a
+        current one in `AGENTLEFS_TOKEN_FILE`, on a machine signed in with
+        `afs-run login` or in a GitHub Actions job with a federation trust. Long-lived
+        `afs_` (and `cht_`) API keys are no longer accepted and are answered 401 with
+        how to sign in instead. Browser session tokens, and the token endpoint's
+        refresh and renewal tokens, are not accepted on this API.
 
   parameters:
     LocationQuery:
