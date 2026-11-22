@@ -756,7 +756,7 @@ export class DocumentsClient {
 
     /**
      * The one upload every agentleFS surface uses (the console's Upload and the MCP tool
-     * `doc_create action=upload` send this same manifest). Name each file by its
+     * `doc_update action=upload` send this same manifest). Name each file by its
      * SHA-256 and size, relative to `destination`, and each path is answered:
      *
      * - `unchanged`: the destination already holds these bytes; nothing to send.
